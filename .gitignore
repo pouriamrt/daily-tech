@@ -2,6 +2,6 @@
 __pycache__/
 *.pyc
 .env
-.http_cache/
+.http_cache*
 daily_report.html
 knowledge.json

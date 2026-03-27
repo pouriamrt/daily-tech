@@ -8,9 +8,10 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
 
-import hishel
 import httpx
 from dotenv import load_dotenv
+from hishel import SyncSqliteStorage
+from hishel.httpx import SyncCacheClient
 from langchain.chat_models import init_chat_model
 from tqdm import tqdm
 
@@ -100,10 +101,13 @@ class KnowledgeEntry:
     summary: str
 
 
-def _build_client() -> hishel.CacheClient:
+def _build_client() -> SyncCacheClient:
     """Create an httpx client with transparent HTTP caching via hishel."""
-    storage = hishel.FileStorage(base_path=str(BASE_DIR / ".http_cache"))
-    return hishel.CacheClient(storage=storage, headers=HEADERS, timeout=30.0)
+    storage = SyncSqliteStorage(
+        database_path=str(BASE_DIR / ".http_cache.db"),
+        default_ttl=3600.0,
+    )
+    return SyncCacheClient(storage=storage, headers=HEADERS, timeout=30.0)
 
 
 def _hint_for(url: str) -> str:
@@ -279,13 +283,29 @@ def generate_html_report() -> None:
     log.info("HTML report generated: %s", REPORT_PATH)
 
 
+def _sources_fetched_today() -> set[str]:
+    """Return source URLs that already have entries for today."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    try:
+        data: list[dict[str, str]] = json.loads(DB_PATH.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+    return {e["source"] for e in data if e["timestamp"].startswith(today)}
+
+
 def fetch_and_process(days: int = 7) -> None:
-    """Fetch data from all sources and generate LLM summaries."""
+    """Fetch data from all sources and generate LLM summaries, skipping today's dupes."""
     date_cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
+    already_done = _sources_fetched_today()
 
     with _build_client() as client:
         for url in tqdm(SOURCES, desc="Fetching sources"):
             resolved_url = url.format(date=date_cutoff) if "{date}" in url else url
+
+            if resolved_url in already_done:
+                log.info("Skipping (already fetched today): %s", resolved_url)
+                continue
+
             try:
                 resp = client.get(resolved_url)
                 resp.raise_for_status()
@@ -304,7 +324,7 @@ def fetch_and_process(days: int = 7) -> None:
 
 
 if __name__ == "__main__":
-    fetch_and_process(days=2)
+    fetch_and_process(days=7)
     generate_html_report()
     print("🧠 Daily knowledge added.")
     os.startfile("C:/Users/pouri/Python/AI/Test/daily_tech")
