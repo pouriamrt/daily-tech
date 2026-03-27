@@ -5,3 +5,4 @@ __pycache__/
 .http_cache*
 daily_report.html
 knowledge.json
+knowledge.db

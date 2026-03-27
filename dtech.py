@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import json
 import logging
 import os
-from dataclasses import asdict, dataclass
+import sqlite3
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlparse
@@ -22,7 +22,7 @@ load_dotenv(override=True)
 # ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "knowledge.json"
+DB_PATH = BASE_DIR / "knowledge.db"
 REPORT_PATH = BASE_DIR / "daily_report.html"
 
 log = logging.getLogger(__name__)
@@ -108,6 +108,25 @@ class KnowledgeEntry:
     summary: str
 
 
+def _init_db() -> None:
+    """Create the knowledge table if it doesn't exist."""
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS knowledge (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp TEXT    NOT NULL,
+                source    TEXT    NOT NULL,
+                summary   TEXT    NOT NULL,
+                date      TEXT    NOT NULL,
+                UNIQUE(source, date)
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_knowledge_date
+            ON knowledge(date DESC)
+        """)
+
+
 def _build_client() -> SyncCacheClient:
     """Create an httpx client with transparent HTTP caching via hishel."""
     storage = SyncSqliteStorage(
@@ -171,13 +190,17 @@ Here is the raw data to summarize:
 
 
 def store(entry: KnowledgeEntry) -> None:
-    """Append a knowledge entry to the JSON database."""
-    try:
-        data: list[dict[str, str]] = json.loads(DB_PATH.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        data = []
-    data.append(asdict(entry))
-    DB_PATH.write_text(json.dumps(data, indent=4, ensure_ascii=False), encoding="utf-8")
+    """Insert a knowledge entry, skipping if source+date already exists."""
+    date = entry.timestamp[:10]
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.execute(
+            """
+            INSERT OR IGNORE INTO knowledge
+                (timestamp, source, summary, date)
+            VALUES (?, ?, ?, ?)
+            """,
+            (entry.timestamp, entry.source, entry.summary, date),
+        )
 
 
 def nice_source_label(url: str) -> str:
@@ -271,9 +294,14 @@ _CATEGORY_META: dict[str, tuple[str, str, str]] = {
 
 
 def generate_html_report() -> None:
-    """Read knowledge.json and render a styled HTML dashboard."""
-    data: list[dict[str, str]] = json.loads(DB_PATH.read_text(encoding="utf-8"))
-    data = sorted(data, key=lambda x: x["timestamp"], reverse=True)
+    """Read knowledge DB and render a styled HTML dashboard."""
+    _init_db()
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute(
+            "SELECT timestamp, source, summary FROM knowledge ORDER BY timestamp DESC LIMIT 20"
+        ).fetchall()
+    data = [dict(r) for r in rows]
 
     today_str = datetime.now().strftime("%A, %B %d, %Y")
     items = data[:20]
@@ -924,15 +952,17 @@ def generate_html_report() -> None:
 def _sources_fetched_today() -> set[str]:
     """Return source URLs that already have entries for today."""
     today = datetime.now().strftime("%Y-%m-%d")
-    try:
-        data: list[dict[str, str]] = json.loads(DB_PATH.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return set()
-    return {e["source"] for e in data if e["timestamp"].startswith(today)}
+    with sqlite3.connect(DB_PATH) as conn:
+        rows = conn.execute(
+            "SELECT source FROM knowledge WHERE date = ?",
+            (today,),
+        ).fetchall()
+    return {r[0] for r in rows}
 
 
 def fetch_and_process(days: int = 7) -> None:
     """Fetch data from all sources and generate LLM summaries, skipping today's dupes."""
+    _init_db()
     date_cutoff = (datetime.now() - timedelta(days=days)).strftime("%Y-%m-%d")
     already_done = _sources_fetched_today()
 
