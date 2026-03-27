@@ -74,6 +74,13 @@ SUMMARY_HINTS: dict[str, str] = {
         "showing a practical, learnable usage of a NEW feature from the latest "
         "release. Keep the example under 15 lines."
     ),
+    "topic:google-adk": (
+        "After the repos section, add a <h3>Quick Example</h3> section "
+        "with a small, self-contained Python code snippet (inside <pre><code>) "
+        "showing a practical, learnable usage of Google ADK based on the most "
+        "interesting repo in the list (e.g. creating a simple agent, using "
+        "tools, or a multi-agent pattern). Keep the example under 15 lines."
+    ),
     "anthropics/claude-code": (
         "After the releases section, add a <h3>Quick Example</h3> section "
         "with a small, self-contained code snippet (inside <pre><code>) "
@@ -185,97 +192,728 @@ def nice_source_label(url: str) -> str:
     return path or url
 
 
+def _source_category(url: str) -> str:
+    """Classify a source URL into a category for visual grouping."""
+    if "/search/repositories" in url:
+        if "topic:machine-learning" in url:
+            return "ml"
+        if "topic:llm" in url:
+            return "llm"
+        if "topic:google-adk" in url:
+            return "adk"
+        return "trending"
+    if "/releases" in url:
+        return "release"
+    return "other"
+
+
+def _svg(body: str) -> str:
+    """Wrap SVG body in a 14x14 icon element."""
+    return (
+        '<svg width="14" height="14" viewBox="0 0 24 24"'
+        f' fill="none" stroke="currentColor" stroke-width="2">{body}</svg>'
+    )
+
+
+# Category display config: (label, accent color, icon SVG)
+_CATEGORY_META: dict[str, tuple[str, str, str]] = {
+    "trending": (
+        "Trending",
+        "#7c3aed",
+        _svg(
+            '<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/>'
+        ),
+    ),
+    "ml": (
+        "Machine Learning",
+        "#db2777",
+        _svg(
+            '<circle cx="12" cy="12" r="3"/>'
+            '<path d="M12 1v4M12 19v4M4.22 4.22l2.83 2.83'
+            "M16.95 16.95l2.83 2.83M1 12h4M19 12h4"
+            'M4.22 19.78l2.83-2.83M16.95 7.05l2.83-2.83"/>'
+        ),
+    ),
+    "llm": (
+        "LLM &amp; Agents",
+        "#2563eb",
+        _svg('<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>'),
+    ),
+    "adk": (
+        "Google ADK",
+        "#059669",
+        _svg(
+            '<polygon points="12 2 22 8.5 22 15.5'
+            ' 12 22 2 15.5 2 8.5 12 2"/>'
+            '<line x1="12" y1="22" x2="12" y2="15.5"/>'
+            '<polyline points="22 8.5 12 15.5 2 8.5"/>'
+        ),
+    ),
+    "release": (
+        "Release",
+        "#d97706",
+        _svg(
+            '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1'
+            '-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>'
+            '<line x1="7" y1="7" x2="7.01" y2="7"/>'
+        ),
+    ),
+    "other": (
+        "Other",
+        "#64748b",
+        _svg(
+            '<circle cx="12" cy="12" r="10"/>'
+            '<line x1="12" y1="16" x2="12" y2="12"/>'
+            '<line x1="12" y1="8" x2="12.01" y2="8"/>'
+        ),
+    ),
+}
+
+
 def generate_html_report() -> None:
     """Read knowledge.json and render a styled HTML dashboard."""
     data: list[dict[str, str]] = json.loads(DB_PATH.read_text(encoding="utf-8"))
     data = sorted(data, key=lambda x: x["timestamp"], reverse=True)
 
     today_str = datetime.now().strftime("%A, %B %d, %Y")
+    items = data[:20]
 
+    # Count entries per category for stats bar
+    cat_counts: dict[str, int] = {}
+    for item in items:
+        cat = _source_category(item["source"])
+        cat_counts[cat] = cat_counts.get(cat, 0) + 1
+
+    # Build stat pills
+    stat_pills = ""
+    for cat, count in cat_counts.items():
+        label, color, icon = _CATEGORY_META.get(cat, _CATEGORY_META["other"])
+        stat_pills += (
+            f'<span class="stat-pill" data-cat="{cat}" style="--accent:{color}">'
+            f"{icon} {label} <strong>{count}</strong></span>"
+        )
+
+    # Build filter buttons
+    filter_buttons = '<button class="filter-btn active" data-filter="all">All</button>'
+    for cat in cat_counts:
+        label, color, _icon = _CATEGORY_META.get(cat, _CATEGORY_META["other"])
+        filter_buttons += (
+            f'<button class="filter-btn" data-filter="{cat}" '
+            f'style="--accent:{color}">{label}</button>'
+        )
+
+    # Build cards
     cards = ""
-    for item in data[:20]:
+    for idx, item in enumerate(items):
         ts = datetime.fromisoformat(item["timestamp"])
-        human_time = ts.strftime("%Y-%m-%d %H:%M")
+        human_time = ts.strftime("%b %d, %Y &middot; %H:%M")
         source_label = nice_source_label(item["source"])
+        cat = _source_category(item["source"])
+        label, color, icon = _CATEGORY_META.get(cat, _CATEGORY_META["other"])
 
+        delay = idx * 60
         cards += f"""
-        <div class="card">
-            <div class="card-header">
-                <div>
-                    <div class="source-label">{source_label}</div>
-                    <div class="badge"><span class="badge-dot"></span>GitHub</div>
+        <article class="card" data-cat="{cat}"
+                 style="--accent:{color};animation-delay:{delay}ms">
+            <div class="card-accent"></div>
+            <div class="card-inner">
+                <div class="card-header">
+                    <div class="card-meta">
+                        <span class="badge" style="--accent:{color}">{icon} {label}</span>
+                        <span class="source-label">{source_label}</span>
+                    </div>
+                    <time class="time">{human_time}</time>
                 </div>
-                <div class="time">{human_time}</div>
+                <div class="summary">{item["summary"]}</div>
             </div>
-            <div class="source-url">{item["source"]}</div>
-            <div class="summary">{item["summary"]}</div>
-        </div>"""
+        </article>"""
 
+    total = len(items)
+    gfonts = (
+        "https://fonts.googleapis.com/css2"
+        "?family=Inter:wght@400;500;600;700;800"
+        "&family=JetBrains+Mono:wght@400;500&display=swap"
+    )
     html = f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Daily Tech Intelligence</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="{gfonts}" rel="stylesheet">
     <style>
-        * {{ box-sizing: border-box; }}
-        body {{
-            margin: 0;
-            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            background: radial-gradient(circle at top left, #1e293b 0, #020617 55%);
-            color: #e5e7eb;
+        :root {{
+            --bg-deep: #f8f7f4;
+            --bg-surface: #ffffff;
+            --bg-card: #ffffff;
+            --bg-card-hover: #ffffff;
+            --border-subtle: rgba(0, 0, 0, 0.06);
+            --border-card: rgba(0, 0, 0, 0.08);
+            --border-hover: rgba(0, 0, 0, 0.14);
+            --text-primary: #1a1a2e;
+            --text-body: #374151;
+            --text-secondary: #6b7280;
+            --text-muted: #9ca3af;
+            --radius-lg: 16px;
+            --radius-md: 12px;
+            --radius-sm: 8px;
+            --shadow-sm:
+                0 1px 2px rgba(0,0,0,0.04),
+                0 1px 3px rgba(0,0,0,0.06);
+            --shadow-md:
+                0 4px 12px rgba(0,0,0,0.05),
+                0 1px 3px rgba(0,0,0,0.06);
+            --shadow-lg:
+                0 8px 24px rgba(0,0,0,0.07),
+                0 2px 6px rgba(0,0,0,0.04);
+            --font-sans: "Inter", system-ui,
+                -apple-system, "Segoe UI", sans-serif;
+            --font-mono: "JetBrains Mono", "Fira Code",
+                "Cascadia Code", Consolas, monospace;
         }}
-        .wrapper {{ max-width: 980px; margin: 0 auto; padding: 32px 16px 56px; }}
-        .header-title {{ font-size: 28px; font-weight: 700; margin-bottom: 4px; }}
-        .header-subtitle {{ font-size: 14px; color: #9ca3af; margin-bottom: 24px; }}
-        .card {{
-            background: rgba(15,23,42,0.96);
-            padding: 20px 24px;
-            margin-bottom: 20px;
+
+        * {{
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }}
+        html {{ scroll-behavior: smooth; }}
+
+        body {{
+            font-family: var(--font-sans);
+            background: var(--bg-deep);
+            color: var(--text-body);
+            line-height: 1.7;
+            min-height: 100vh;
+            font-size: 16px;
+            -webkit-font-smoothing: antialiased;
+            -moz-osx-font-smoothing: grayscale;
+        }}
+
+        /* ── Ambient background ── */
+        body::before {{
+            content: "";
+            position: fixed;
+            inset: 0;
+            background:
+                radial-gradient(
+                    ellipse 80% 50% at 10% 0%,
+                    rgba(167,139,250,0.06) 0%,
+                    transparent 50%
+                ),
+                radial-gradient(
+                    ellipse 60% 40% at 90% 10%,
+                    rgba(244,114,182,0.05) 0%,
+                    transparent 45%
+                ),
+                radial-gradient(
+                    ellipse 50% 40% at 50% 100%,
+                    rgba(52,211,153,0.04) 0%,
+                    transparent 45%
+                );
+            pointer-events: none;
+            z-index: 0;
+        }}
+
+        .wrapper {{
+            position: relative;
+            z-index: 1;
+            max-width: 920px;
+            margin: 0 auto;
+            padding: 56px 24px 100px;
+        }}
+
+        /* ── Header ── */
+        .header {{
+            text-align: center;
+            margin-bottom: 44px;
+            padding-bottom: 36px;
+            border-bottom: 1px solid var(--border-subtle);
+        }}
+        .header-icon {{
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 64px;
+            height: 64px;
             border-radius: 18px;
-            border: 1px solid rgba(148,163,184,0.3);
-            box-shadow: 0 18px 45px rgba(0,0,0,0.55);
+            background: linear-gradient(
+                135deg, #6366f1, #a855f7
+            );
+            margin-bottom: 20px;
+            box-shadow:
+                0 4px 16px rgba(99,102,241,0.2),
+                0 1px 3px rgba(0,0,0,0.08);
+        }}
+        .header-icon svg {{ color: #fff; }}
+        .header-title {{
+            font-size: 42px;
+            font-weight: 800;
+            letter-spacing: -0.035em;
+            line-height: 1.15;
+            background: linear-gradient(
+                135deg,
+                #1a1a2e 0%,
+                #4f46e5 50%,
+                #a855f7 100%
+            );
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 8px;
+        }}
+        .header-date {{
+            font-size: 17px;
+            color: var(--text-secondary);
+            font-weight: 400;
+            margin-bottom: 6px;
+        }}
+        .header-count {{
+            font-size: 14px;
+            color: var(--text-muted);
+        }}
+
+        /* ── Stats bar ── */
+        .stats {{
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 10px;
+            margin-bottom: 16px;
+        }}
+        .stat-pill {{
+            display: inline-flex;
+            align-items: center;
+            gap: 7px;
+            padding: 8px 16px;
+            border-radius: 999px;
+            background: var(--bg-surface);
+            border: 1px solid var(--border-subtle);
+            font-size: 13px;
+            color: color-mix(
+                in srgb, var(--accent) 80%, #1a1a2e
+            );
+            font-weight: 500;
+            transition: all 0.25s;
+            box-shadow: var(--shadow-sm);
+        }}
+        .stat-pill:hover {{
+            border-color: var(--border-hover);
+            box-shadow: var(--shadow-md);
+        }}
+        .stat-pill strong {{
+            font-weight: 700;
+            font-size: 14px;
+        }}
+        .stat-pill svg {{ opacity: 0.85; }}
+
+        /* ── Filter bar ── */
+        .filters {{
+            display: flex;
+            flex-wrap: wrap;
+            justify-content: center;
+            gap: 8px;
+            margin-bottom: 36px;
+        }}
+        .filter-btn {{
+            padding: 9px 20px;
+            border-radius: 999px;
+            border: 1px solid var(--border-subtle);
+            background: transparent;
+            color: var(--text-secondary);
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.25s ease;
+            font-family: var(--font-sans);
+        }}
+        .filter-btn:hover {{
+            border-color: var(--border-hover);
+            color: var(--text-primary);
+            background: rgba(0,0,0,0.02);
+        }}
+        .filter-btn.active {{
+            background: var(--text-primary);
+            border-color: var(--text-primary);
+            color: #fff;
+            font-weight: 600;
+            box-shadow: var(--shadow-sm);
+        }}
+
+        /* ── Cards ── */
+        .card {{
+            position: relative;
+            display: flex;
+            margin-bottom: 20px;
+            border-radius: var(--radius-lg);
+            background: var(--bg-card);
+            border: 1px solid var(--border-card);
+            overflow: hidden;
+            transition:
+                transform 0.3s cubic-bezier(.25,.8,.25,1),
+                box-shadow 0.3s cubic-bezier(.25,.8,.25,1),
+                border-color 0.3s ease;
+            animation: fadeSlideIn 0.6s ease both;
+            box-shadow: var(--shadow-sm);
+        }}
+        .card:hover {{
+            border-color: var(--border-hover);
+            transform: translateY(-2px);
+            box-shadow: var(--shadow-lg);
+        }}
+        .card.hidden {{ display: none; }}
+
+        .card-accent {{
+            width: 4px;
+            flex-shrink: 0;
+            background: linear-gradient(
+                180deg,
+                var(--accent) 0%,
+                color-mix(
+                    in srgb,
+                    var(--accent) 30%,
+                    transparent
+                ) 100%
+            );
+            opacity: 0.8;
+            transition: opacity 0.3s;
+        }}
+        .card:hover .card-accent {{
+            opacity: 1;
+        }}
+
+        .card-inner {{
+            flex: 1;
+            padding: 24px 28px 22px;
+            min-width: 0;
         }}
         .card-header {{
-            display: flex; justify-content: space-between;
-            align-items: baseline; gap: 12px; margin-bottom: 10px;
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 14px;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+        }}
+        .card-meta {{
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            flex-wrap: wrap;
         }}
         .source-label {{
-            font-size: 13px; color: #a5b4fc;
-            text-transform: uppercase; letter-spacing: 0.16em;
+            font-size: 14px;
+            color: var(--text-secondary);
+            font-weight: 500;
         }}
-        .time {{ font-size: 12px; color: #6ee7b7; white-space: nowrap; }}
-        .source-url {{
-            font-size: 12px; color: #38bdf8;
-            word-break: break-all; margin-bottom: 8px;
+        .time {{
+            font-size: 13px;
+            color: var(--text-muted);
+            white-space: nowrap;
+            font-variant-numeric: tabular-nums;
         }}
-        .summary {{ margin-top: 4px; line-height: 1.6; font-size: 14px; }}
-        .summary h2, .summary h3 {{ color: #e5e7eb; margin: 10px 0 4px; }}
-        .summary ul {{ margin: 4px 0 8px 20px; padding: 0; }}
-        .summary li {{ margin-bottom: 4px; }}
-        .summary a {{ color: #38bdf8; text-decoration: none; }}
-        .summary a:hover {{ text-decoration: underline; }}
-        .summary pre {{
-            background: rgba(0,0,0,0.4); border-radius: 8px;
-            padding: 12px 16px; overflow-x: auto; font-size: 13px;
-        }}
-        .summary code {{ font-family: "Fira Code", Consolas, monospace; }}
         .badge {{
-            display: inline-flex; align-items: center;
-            padding: 2px 8px; border-radius: 999px;
-            background: rgba(56,189,248,0.1); color: #7dd3fc;
-            font-size: 11px; font-weight: 500; gap: 4px;
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            padding: 6px 14px;
+            border-radius: 999px;
+            background: color-mix(
+                in srgb, var(--accent) 12%, #fff
+            );
+            color: color-mix(
+                in srgb, var(--accent) 85%, #1a1a2e
+            );
+            font-size: 12.5px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            border: 1px solid color-mix(
+                in srgb, var(--accent) 20%, transparent
+            );
         }}
-        .badge-dot {{ width: 6px; height: 6px; border-radius: 999px; background: #38bdf8; }}
-        .footer {{ margin-top: 18px; font-size: 11px; color: #6b7280; text-align: center; }}
+        .badge svg {{ flex-shrink: 0; }}
+
+        /* ── Summary content ── */
+        .summary {{
+            font-size: 15.5px;
+            line-height: 1.75;
+            color: var(--text-body);
+        }}
+        .summary h2 {{
+            font-size: 21px;
+            font-weight: 700;
+            color: var(--text-primary);
+            margin: 0 0 10px;
+            letter-spacing: -0.015em;
+            line-height: 1.3;
+        }}
+        .summary h3 {{
+            font-size: 13px;
+            font-weight: 600;
+            color: color-mix(
+                in srgb, var(--accent) 80%, #1a1a2e
+            );
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            margin: 22px 0 10px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid var(--border-subtle);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+        .summary p {{
+            margin: 0 0 14px;
+            color: var(--text-secondary);
+            font-size: 15px;
+        }}
+        .summary ul {{
+            margin: 8px 0 14px 0;
+            padding-left: 22px;
+            list-style: none;
+        }}
+        .summary ul li {{
+            position: relative;
+            margin-bottom: 8px;
+            padding-left: 6px;
+            color: var(--text-body);
+            font-size: 15px;
+            line-height: 1.7;
+        }}
+        .summary ul li::before {{
+            content: "";
+            position: absolute;
+            left: -15px;
+            top: 11px;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: color-mix(
+                in srgb,
+                var(--accent, #6b7280) 70%,
+                #1a1a2e
+            );
+            opacity: 0.7;
+        }}
+        .summary ul li strong {{
+            color: var(--text-primary);
+            font-weight: 600;
+        }}
+        .summary a {{
+            color: #4338ca;
+            text-decoration: none;
+            border-bottom:
+                1px solid rgba(67,56,202,0.2);
+            transition: all 0.2s;
+            font-weight: 500;
+        }}
+        .summary a:hover {{
+            color: #3730a3;
+            border-color: rgba(55,48,163,0.5);
+        }}
+
+        /* ── Code blocks ── */
+        .summary pre {{
+            background: #f4f4f5;
+            border: 1px solid rgba(0,0,0,0.08);
+            border-radius: var(--radius-md);
+            padding: 18px 22px;
+            overflow-x: auto;
+            font-size: 14px;
+            line-height: 1.65;
+            margin: 16px 0;
+            position: relative;
+            color: #1e1e2e;
+        }}
+        .summary pre::before {{
+            content: "code";
+            position: absolute;
+            top: 8px;
+            right: 12px;
+            font-size: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+            color: #9ca3af;
+            opacity: 0.7;
+            font-family: var(--font-sans);
+        }}
+        .summary code {{
+            font-family: var(--font-mono);
+            font-size: 0.92em;
+        }}
+        .summary :not(pre) > code {{
+            background: rgba(99,102,241,0.08);
+            padding: 3px 7px;
+            border-radius: 5px;
+            font-size: 0.88em;
+            color: #4338ca;
+            border: 1px solid rgba(99,102,241,0.1);
+        }}
+
+        /* ── Spacing between cards ── */
+        .card + .card {{
+            margin-top: 20px;
+        }}
+
+        /* ── Footer ── */
+        .footer {{
+            margin-top: 56px;
+            padding: 28px 0 0;
+            border-top: 1px solid var(--border-subtle);
+            text-align: center;
+            font-size: 13px;
+            color: var(--text-muted);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 6px;
+        }}
+
+        /* ── Scroll to top ── */
+        .scroll-top {{
+            position: fixed;
+            bottom: 32px;
+            right: 32px;
+            width: 44px;
+            height: 44px;
+            border-radius: var(--radius-md);
+            background: var(--bg-surface);
+            border: 1px solid var(--border-card);
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            opacity: 0;
+            transform: translateY(12px);
+            transition: all 0.35s;
+            z-index: 100;
+            box-shadow: var(--shadow-md);
+        }}
+        .scroll-top.visible {{
+            opacity: 1;
+            transform: translateY(0);
+        }}
+        .scroll-top:hover {{
+            background: var(--text-primary);
+            color: #fff;
+            border-color: var(--text-primary);
+            box-shadow: var(--shadow-lg);
+        }}
+
+        /* ── Animations ── */
+        @keyframes fadeSlideIn {{
+            from {{
+                opacity: 0;
+                transform: translateY(24px);
+            }}
+            to {{
+                opacity: 1;
+                transform: translateY(0);
+            }}
+        }}
+
+        /* ── Responsive ── */
+        @media (max-width: 640px) {{
+            .wrapper {{
+                padding: 28px 14px 64px;
+            }}
+            .header-title {{ font-size: 30px; }}
+            .header-icon {{
+                width: 52px;
+                height: 52px;
+            }}
+            .card-inner {{ padding: 18px 16px; }}
+            .card-header {{
+                flex-direction: column;
+                gap: 8px;
+            }}
+            .summary {{ font-size: 15px; }}
+            .summary h2 {{ font-size: 19px; }}
+            .filter-btn {{
+                padding: 8px 14px;
+            }}
+        }}
     </style>
 </head>
 <body>
     <div class="wrapper">
-        <div class="header-title">Daily Tech Intelligence</div>
-        <div class="header-subtitle">{today_str}</div>
+        <header class="header">
+            <div class="header-icon">
+                <svg width="30" height="30"
+                     viewBox="0 0 24 24" fill="none"
+                     stroke="currentColor" stroke-width="1.5">
+                    <path d="M13 2L3 14h9l-1 8
+                             10-12h-9l1-8z"/>
+                </svg>
+            </div>
+            <h1 class="header-title">Daily Tech Intelligence</h1>
+            <p class="header-date">{today_str}</p>
+            <p class="header-count">{total} briefings</p>
+        </header>
+
+        <div class="stats">{stat_pills}</div>
+        <nav class="filters">{filter_buttons}</nav>
+
 {cards}
-        <div class="footer">Generated automatically by daily_tech.</div>
+
+        <footer class="footer">
+            <span>Generated by daily_tech</span>
+        </footer>
     </div>
+
+    <button class="scroll-top" id="scrollTop"
+            title="Scroll to top">
+        <svg width="20" height="20"
+             viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.5">
+            <polyline points="18 15 12 9 6 15"/>
+        </svg>
+    </button>
+
+    <script>
+        /* ── Filter logic ── */
+        const btns = document.querySelectorAll('.filter-btn');
+        const cards = document.querySelectorAll('.card');
+        btns.forEach(btn => {{
+            btn.addEventListener('click', () => {{
+                btns.forEach(b =>
+                    b.classList.remove('active'));
+                btn.classList.add('active');
+                const f = btn.dataset.filter;
+                cards.forEach(c => {{
+                    const hide = f !== 'all'
+                        && c.dataset.cat !== f;
+                    c.classList.toggle('hidden', hide);
+                }});
+            }});
+        }});
+
+        /* ── Scroll-to-top button ── */
+        const sBtn = document.getElementById('scrollTop');
+        window.addEventListener('scroll', () => {{
+            sBtn.classList.toggle('visible',
+                window.scrollY > 400);
+        }});
+        sBtn.addEventListener('click', () => {{
+            window.scrollTo({{
+                top: 0, behavior: 'smooth'
+            }});
+        }});
+
+        /* ── Open all summary links in new tab ── */
+        document.querySelectorAll('.summary a')
+            .forEach(a => {{
+                a.setAttribute('target', '_blank');
+                a.setAttribute(
+                    'rel', 'noopener noreferrer'
+                );
+            }});
+    </script>
 </body>
 </html>"""
 
