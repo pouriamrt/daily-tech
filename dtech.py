@@ -965,4 +965,4 @@ if __name__ == "__main__":
     fetch_and_process(days=7)
     generate_html_report()
     print("🧠 Daily knowledge added.")
-    os.startfile("C:/Users/pouri/Python/AI/Test/daily_tech")
+    os.startfile(REPORT_PATH)
