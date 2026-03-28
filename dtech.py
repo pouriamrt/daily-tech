@@ -617,17 +617,23 @@ def generate_html_report() -> None:
     _init_db()
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(
-            "SELECT timestamp, source, summary FROM knowledge ORDER BY timestamp DESC LIMIT 20"
+        paper_rows = conn.execute(
+            "SELECT timestamp, source, summary FROM knowledge "
+            "WHERE source LIKE 'arxiv:%' ORDER BY timestamp DESC LIMIT 10"
         ).fetchall()
-    data = [dict(r) for r in rows]
+        github_rows = conn.execute(
+            "SELECT timestamp, source, summary FROM knowledge "
+            "WHERE source NOT LIKE 'arxiv:%' ORDER BY timestamp DESC LIMIT 20"
+        ).fetchall()
+    paper_items = [dict(r) for r in paper_rows]
+    items = [dict(r) for r in github_rows]
 
     today_str = datetime.now().strftime("%A, %B %d, %Y")
-    items = data[:20]
 
     # Count entries per category for stats bar
+    all_items = paper_items + items
     cat_counts: dict[str, int] = {}
-    for item in items:
+    for item in all_items:
         cat = _source_category(item["source"])
         cat_counts[cat] = cat_counts.get(cat, 0) + 1
 
@@ -648,6 +654,45 @@ def generate_html_report() -> None:
             f'<button class="filter-btn" data-filter="{cat}" '
             f'style="--accent:{color}">{label}</button>'
         )
+
+    # Build paper section
+    paper_section = ""
+    if paper_items:
+        paper_section += (
+            '\n        <section class="paper-section">'
+            '\n            <div class="section-divider">'
+            '\n                <span class="section-divider-icon" style="--accent:#0891b2">'
+            f"\n                    {_CATEGORY_META['paper'][2]} Research Papers"
+            "\n                </span>"
+            "\n            </div>"
+        )
+
+        for idx, item in enumerate(paper_items):
+            ts = datetime.fromisoformat(item["timestamp"])
+            human_time = ts.strftime("%b %d, %Y &middot; %H:%M")
+            source_label = nice_source_label(item["source"])
+            color = "#0891b2"
+            label = "Research Papers"
+            icon = _CATEGORY_META["paper"][2]
+
+            delay = idx * 60
+            paper_section += f"""
+            <article class="card" data-cat="paper"
+                     style="--accent:{color};animation-delay:{delay}ms">
+                <div class="card-accent"></div>
+                <div class="card-inner">
+                    <div class="card-header">
+                        <div class="card-meta">
+                            <span class="badge" style="--accent:{color}">{icon} {label}</span>
+                            <span class="source-label">{source_label}</span>
+                        </div>
+                        <time class="time">{human_time}</time>
+                    </div>
+                    <div class="summary">{item["summary"]}</div>
+                </div>
+            </article>"""
+
+        paper_section += "\n        </section>"
 
     # Build cards
     cards = ""
@@ -675,7 +720,7 @@ def generate_html_report() -> None:
             </div>
         </article>"""
 
-    total = len(items)
+    total = len(paper_items) + len(items)
     gfonts = (
         "https://fonts.googleapis.com/css2"
         "?family=Inter:wght@400;500;600;700;800"
@@ -911,6 +956,63 @@ def generate_html_report() -> None:
             box-shadow: var(--shadow-lg);
         }}
         .card.hidden {{ display: none; }}
+
+        /* ── Paper section ── */
+        .paper-section {{
+            margin-bottom: 40px;
+        }}
+        .section-divider {{
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 24px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid rgba(8, 145, 178, 0.15);
+        }}
+        .section-divider-icon {{
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 18px;
+            font-weight: 700;
+            color: #0891b2;
+            letter-spacing: -0.01em;
+        }}
+        .section-divider-icon svg {{
+            opacity: 0.85;
+        }}
+        .summary .paper-tldr {{
+            font-style: italic;
+            color: var(--text-secondary);
+            font-size: 15px;
+            margin: 0 0 16px;
+        }}
+        .summary h4 {{
+            font-size: 12.5px;
+            font-weight: 600;
+            color: color-mix(
+                in srgb, var(--accent) 80%, #1a1a2e
+            );
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin: 18px 0 8px;
+        }}
+
+        /* ── GitHub section divider ── */
+        .github-section-divider {{
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 24px;
+            padding-bottom: 12px;
+            border-bottom: 2px solid rgba(0, 0, 0, 0.06);
+        }}
+        .github-section-divider span {{
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-primary);
+            letter-spacing: -0.01em;
+        }}
 
         .card-accent {{
             width: 4px;
@@ -1205,6 +1307,12 @@ def generate_html_report() -> None:
 
         <div class="stats">{stat_pills}</div>
         <nav class="filters">{filter_buttons}</nav>
+
+{paper_section}
+
+        <div class="github-section-divider">
+            <span>GitHub Activity</span>
+        </div>
 
 {cards}
 
