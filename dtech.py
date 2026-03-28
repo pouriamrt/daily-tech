@@ -157,6 +157,87 @@ def _hint_for(url: str) -> str:
     return ""
 
 
+ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
+
+ARXIV_QUERY = (
+    "http://export.arxiv.org/api/query"
+    "?search_query=cat:cs.AI+OR+cat:cs.LG+OR+cat:cs.CL"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=20"
+)
+
+
+def _build_paper_client() -> SyncCacheClient:
+    """Create an httpx client for paper APIs (no GitHub auth headers)."""
+    storage = SyncSqliteStorage(
+        database_path=str(BASE_DIR / ".http_cache.db"),
+        default_ttl=3600.0,
+    )
+    return SyncCacheClient(
+        storage=storage,
+        headers={"User-Agent": "daily-knowledge-bot"},
+        timeout=30.0,
+    )
+
+
+def _parse_arxiv_id(raw_id: str) -> str:
+    """Extract the numeric arXiv ID from a full URL like 'http://arxiv.org/abs/2403.12345v1'."""
+    segment = raw_id.rstrip("/").split("/")[-1]
+    if "v" in segment:
+        segment = segment[: segment.rfind("v")]
+    return segment
+
+
+def fetch_arxiv_papers(days: int = 3) -> list[PaperCandidate]:
+    """Fetch recent AI papers from arXiv and return parsed candidates."""
+    papers: list[PaperCandidate] = []
+    with _build_paper_client() as client:
+        try:
+            resp = client.get(ARXIV_QUERY)
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            log.warning("Failed to fetch arXiv: %s", exc)
+            return papers
+
+    root = ET.fromstring(resp.text)
+    cutoff = datetime.now() - timedelta(days=days)
+
+    for entry in root.findall("atom:entry", ARXIV_NS):
+        published_text = entry.findtext("atom:published", "", ARXIV_NS)
+        if not published_text:
+            continue
+        published_dt = datetime.fromisoformat(published_text.replace("Z", "+00:00"))
+        if published_dt.replace(tzinfo=None) < cutoff:
+            continue
+
+        raw_id = entry.findtext("atom:id", "", ARXIV_NS)
+        arxiv_id = _parse_arxiv_id(raw_id)
+
+        title = " ".join(entry.findtext("atom:title", "", ARXIV_NS).split())
+        abstract = " ".join(entry.findtext("atom:summary", "", ARXIV_NS).split())
+
+        pdf_url = ""
+        for link in entry.findall("atom:link", ARXIV_NS):
+            if link.get("title") == "pdf":
+                pdf_url = link.get("href", "")
+                break
+
+        cats = [c.get("term", "") for c in entry.findall("atom:category", ARXIV_NS)]
+
+        papers.append(
+            PaperCandidate(
+                arxiv_id=arxiv_id,
+                title=title,
+                abstract=abstract,
+                published=published_text,
+                pdf_url=pdf_url,
+                categories=", ".join(cats),
+            )
+        )
+
+    log.info("Fetched %d papers from arXiv", len(papers))
+    return papers
+
+
 def summarize(text: str, source: str) -> str:
     """Ask the model to return a compact HTML snippet summarising raw GitHub API JSON."""
     hint = _hint_for(source)
