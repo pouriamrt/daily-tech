@@ -278,6 +278,37 @@ def fetch_hf_daily_papers() -> list[PaperCandidate]:
     return papers
 
 
+def deduplicate_papers(
+    arxiv: list[PaperCandidate],
+    hf: list[PaperCandidate],
+) -> list[PaperCandidate]:
+    """Merge papers from both sources, deduplicating by arXiv ID.
+
+    When a paper appears in both, keep arXiv's richer metadata but set hf_trending=True.
+    """
+    by_id: dict[str, PaperCandidate] = {}
+
+    for p in arxiv:
+        by_id[p.arxiv_id] = p
+
+    for p in hf:
+        if p.arxiv_id in by_id:
+            existing = by_id[p.arxiv_id]
+            by_id[p.arxiv_id] = PaperCandidate(
+                arxiv_id=existing.arxiv_id,
+                title=existing.title,
+                abstract=existing.abstract,
+                published=existing.published,
+                pdf_url=existing.pdf_url,
+                categories=existing.categories,
+                hf_trending=True,
+            )
+        else:
+            by_id[p.arxiv_id] = p
+
+    return list(by_id.values())
+
+
 def summarize(text: str, source: str) -> str:
     """Ask the model to return a compact HTML snippet summarising raw GitHub API JSON."""
     hint = _hint_for(source)

@@ -7,7 +7,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import json as json_mod
 
-from dtech import _source_category, fetch_arxiv_papers, fetch_hf_daily_papers, nice_source_label
+from dtech import (
+    PaperCandidate,
+    _source_category,
+    deduplicate_papers,
+    fetch_arxiv_papers,
+    fetch_hf_daily_papers,
+    nice_source_label,
+)
 
 
 def test_source_category_arxiv():
@@ -129,3 +136,57 @@ def test_fetch_hf_daily_papers_parses_json(monkeypatch):
     assert papers[0].arxiv_id == "2403.67890"
     assert papers[0].hf_trending is True
     assert "agent architectures" in papers[0].abstract
+
+
+def test_deduplicate_papers_merges_by_arxiv_id():
+    """Papers appearing in both sources should be deduped, keeping HF trending flag."""
+    arxiv = [
+        PaperCandidate(
+            arxiv_id="2403.12345",
+            title="Shared Paper",
+            abstract="Abstract from arXiv",
+            published="2026-03-27T00:00:00Z",
+            pdf_url="http://arxiv.org/pdf/2403.12345v1",
+            categories="cs.LG, cs.AI",
+            hf_trending=False,
+        ),
+        PaperCandidate(
+            arxiv_id="2403.99999",
+            title="arXiv Only",
+            abstract="Only on arXiv",
+            published="2026-03-27T00:00:00Z",
+            pdf_url="http://arxiv.org/pdf/2403.99999v1",
+            categories="cs.CL",
+            hf_trending=False,
+        ),
+    ]
+    hf = [
+        PaperCandidate(
+            arxiv_id="2403.12345",
+            title="Shared Paper",
+            abstract="Abstract from HF",
+            published="2026-03-27T12:00:00.000Z",
+            pdf_url="https://arxiv.org/pdf/2403.12345",
+            categories="",
+            hf_trending=True,
+        ),
+        PaperCandidate(
+            arxiv_id="2403.77777",
+            title="HF Only",
+            abstract="Only on HF",
+            published="2026-03-27T08:00:00.000Z",
+            pdf_url="https://arxiv.org/pdf/2403.77777",
+            categories="",
+            hf_trending=True,
+        ),
+    ]
+
+    result = deduplicate_papers(arxiv, hf)
+    assert len(result) == 3
+
+    ids = {p.arxiv_id for p in result}
+    assert ids == {"2403.12345", "2403.99999", "2403.77777"}
+
+    shared = next(p for p in result if p.arxiv_id == "2403.12345")
+    assert shared.hf_trending is True
+    assert shared.categories == "cs.LG, cs.AI"
