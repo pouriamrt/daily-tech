@@ -309,6 +309,71 @@ def deduplicate_papers(
     return list(by_id.values())
 
 
+INTEREST_PROFILE = (
+    "Python developer working with LLMs, agents (Google ADK, LangChain), "
+    "ML pipelines, and applied AI. Interested in practical methodologies, "
+    "training techniques, agent architectures, RAG, and optimization."
+)
+
+
+def _parse_ranked_ids(raw: str) -> list[str]:
+    """Parse LLM ranking output into a list of arXiv IDs. Handles markdown fences."""
+    text = raw.strip()
+    if text.startswith("```"):
+        lines = text.split("\n")
+        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+    try:
+        items = json.loads(text)
+        return [item["arxiv_id"] for item in items if "arxiv_id" in item]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        return []
+
+
+def rank_papers(candidates: list[PaperCandidate], top_n: int = 5) -> list[PaperCandidate]:
+    """LLM Pass 1: select the top-N most relevant papers for our interest profile."""
+    if not candidates:
+        return []
+
+    paper_list = "\n\n".join(
+        f"[{i+1}] ID: {p.arxiv_id} | Title: {p.title}"
+        f"{' | HF-TRENDING' if p.hf_trending else ''}"
+        f"\nAbstract: {p.abstract[:500]}"
+        for i, p in enumerate(candidates)
+    )
+
+    prompt = f"""You are selecting the most relevant AI research papers for a developer.
+
+DEVELOPER PROFILE: {INTEREST_PROFILE}
+
+Below are {len(candidates)} recent papers. Select the top {top_n} most relevant to this
+developer's work. Prefer papers with novel, practical methodologies. Papers marked
+HF-TRENDING have community validation — give them a small relevance boost.
+
+Return ONLY a JSON array (no markdown, no explanation):
+[{{"arxiv_id": "...", "reason": "one-line justification"}}, ...]
+
+PAPERS:
+{paper_list}"""
+
+    response = model.invoke(prompt)
+    ranked_ids = _parse_ranked_ids(response.content)
+
+    if not ranked_ids:
+        log.warning(
+            "LLM ranking returned no valid IDs — falling back to first %d by recency", top_n
+        )
+        return candidates[:top_n]
+
+    by_id = {p.arxiv_id: p for p in candidates}
+    selected = [by_id[aid] for aid in ranked_ids if aid in by_id]
+
+    if not selected:
+        log.warning("LLM ranked IDs not found in candidates — falling back to first %d", top_n)
+        return candidates[:top_n]
+
+    return selected
+
+
 def summarize(text: str, source: str) -> str:
     """Ask the model to return a compact HTML snippet summarising raw GitHub API JSON."""
     hint = _hint_for(source)

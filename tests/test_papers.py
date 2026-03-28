@@ -9,6 +9,7 @@ import json as json_mod
 
 from dtech import (
     PaperCandidate,
+    _parse_ranked_ids,
     _source_category,
     deduplicate_papers,
     fetch_arxiv_papers,
@@ -190,3 +191,21 @@ def test_deduplicate_papers_merges_by_arxiv_id():
     shared = next(p for p in result if p.arxiv_id == "2403.12345")
     assert shared.hf_trending is True
     assert shared.categories == "cs.LG, cs.AI"
+
+
+def test_parse_ranked_ids_valid_json():
+    raw = (
+        '[{"arxiv_id": "2403.111", "reason": "good"},'
+        ' {"arxiv_id": "2403.222", "reason": "great"}]'
+    )
+    assert _parse_ranked_ids(raw) == ["2403.111", "2403.222"]
+
+
+def test_parse_ranked_ids_invalid_json():
+    raw = "This is not valid JSON at all"
+    assert _parse_ranked_ids(raw) == []
+
+
+def test_parse_ranked_ids_strips_markdown_fences():
+    raw = '```json\n[{"arxiv_id": "2403.333", "reason": "nice"}]\n```'
+    assert _parse_ranked_ids(raw) == ["2403.333"]
