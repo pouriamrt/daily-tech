@@ -1,17 +1,18 @@
 # Daily Tech Intelligence
 
-Automated daily tech briefing that fetches trending GitHub repos and release notes, summarizes them with an LLM, and generates a polished HTML dashboard.
+Automated daily tech briefing that fetches trending GitHub repos, release notes, and AI research papers, summarizes them with an LLM, and generates a polished HTML dashboard.
 
 ![Architecture](architecture.png)
 
 ## What It Does
 
-Pulls data from **9 GitHub API sources** every day, asks an LLM to distill the raw JSON into concise developer briefings, stores everything in a local SQLite database, and renders a filterable HTML report that opens in your browser.
+Pulls data from **11 sources** every day across two pipelines, asks an LLM to distill raw data into concise developer briefings, stores everything in a local SQLite database, and renders a filterable HTML report that opens in your browser.
 
 ### Sources
 
 | Category | What's Tracked |
 |----------|---------------|
+| **Research Papers** | arXiv (cs.AI, cs.LG, cs.CL) + HuggingFace Daily Papers |
 | Trending Python | Newly created Python repos by stars |
 | Machine Learning | Repos tagged `machine-learning` |
 | LLM & Agents | Repos tagged `llm` |
@@ -20,11 +21,13 @@ Pulls data from **9 GitHub API sources** every day, asks an LLM to distill the r
 
 ### Features
 
+- **AI research papers** with two-pass LLM pipeline: ranks ~70 candidates by relevance, then generates structured summaries with methodology breakdowns and practical takeaways
 - **LLM-powered summaries** with key releases, upgrade notes, and quick code examples
 - **Per-source hints** that tailor the summarization (e.g. FastAPI gets SSE examples, ADK gets agent snippets)
 - **SQLite storage** with `UNIQUE(source, date)` dedup -- same source won't be re-processed on the same day
-- **HTTP caching** via hishel to avoid redundant GitHub API calls
-- **Light-themed HTML dashboard** with category filters, color-coded cards, staggered animations, and responsive design
+- **HTTP caching** via hishel to avoid redundant API calls
+- **Light-themed HTML dashboard** with category filters, color-coded cards, dedicated paper section, and responsive design
+- **Today-only reports** -- each run generates a fresh daily report, not an accumulation
 
 ## Quick Start
 
@@ -57,11 +60,18 @@ uv run python dtech.py
 ```
 
 This will:
-1. Fetch all 9 sources (skipping any already fetched today)
-2. Summarize each with the LLM
-3. Store results in `knowledge.db`
-4. Generate `daily_report.html`
-5. Open the report in your browser
+1. Fetch AI papers from arXiv + HuggingFace (deduplicate, LLM-rank top 5, generate structured summaries)
+2. Fetch all 9 GitHub sources (skipping any already fetched today)
+3. Summarize each with the LLM
+4. Store results in `knowledge.db`
+5. Generate `daily_report.html`
+6. Open the report in your browser
+
+### Test
+
+```bash
+uv run pytest tests/ -v
+```
 
 ## Project Structure
 
@@ -69,6 +79,7 @@ This will:
 daily-tech/
   dtech.py            # Single-file application (all logic)
   pyproject.toml       # Dependencies and tool config
+  tests/               # Unit tests for paper pipeline
   .env                 # API keys (gitignored)
   knowledge.db         # SQLite knowledge store (gitignored)
   daily_report.html    # Generated report (gitignored)
@@ -80,6 +91,7 @@ All configuration lives at the top of `dtech.py`:
 
 - **`SOURCES`** -- tuple of GitHub API URLs to fetch
 - **`SUMMARY_HINTS`** -- per-source extra instructions for the LLM (e.g. "add a Quick Example section")
+- **`INTEREST_PROFILE`** -- describes your focus areas for paper ranking relevance
 - **`model`** -- LLM model used for summarization (default: `gpt-5.4-nano`)
 
 ## License
