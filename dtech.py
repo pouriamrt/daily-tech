@@ -405,6 +405,52 @@ Keep it concise and useful. Focus on methodology, not hype."""
     return response.content
 
 
+def _papers_fetched_today() -> bool:
+    """Return True if any paper entries exist for today."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    with sqlite3.connect(DB_PATH) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM knowledge WHERE date = ? AND source LIKE 'arxiv:%'",
+            (today,),
+        ).fetchone()
+    return row[0] > 0
+
+
+def fetch_and_process_papers() -> None:
+    """Orchestrator: fetch -> dedup -> rank -> summarize -> store."""
+    _init_db()
+
+    if _papers_fetched_today():
+        log.info("Papers already fetched today — skipping.")
+        return
+
+    log.info("Fetching AI research papers...")
+    arxiv = fetch_arxiv_papers(days=3)
+    hf = fetch_hf_daily_papers()
+
+    if not arxiv and not hf:
+        log.warning("No papers fetched from any source — skipping.")
+        return
+
+    candidates = deduplicate_papers(arxiv, hf)
+    log.info("Deduplicated to %d unique candidates", len(candidates))
+
+    ranked = rank_papers(candidates, top_n=5)
+    log.info("LLM selected %d papers", len(ranked))
+
+    for paper in tqdm(ranked, desc="Summarizing papers"):
+        summary = summarize_paper(paper)
+        store(
+            KnowledgeEntry(
+                timestamp=datetime.now().isoformat(),
+                source=f"arxiv:{paper.arxiv_id}",
+                summary=summary,
+            )
+        )
+
+    log.info("Stored %d paper summaries", len(ranked))
+
+
 def summarize(text: str, source: str) -> str:
     """Ask the model to return a compact HTML snippet summarising raw GitHub API JSON."""
     hint = _hint_for(source)
