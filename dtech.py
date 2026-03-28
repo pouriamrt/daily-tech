@@ -962,7 +962,7 @@ def generate_html_report() -> None:
             transform: translateY(-2px);
             box-shadow: var(--shadow-lg);
         }}
-        .card.hidden {{ display: none; }}
+        .hidden {{ display: none; }}
 
         /* ── Paper section ── */
         .paper-section {{
