@@ -238,6 +238,46 @@ def fetch_arxiv_papers(days: int = 3) -> list[PaperCandidate]:
     return papers
 
 
+HF_DAILY_PAPERS_URL = "https://huggingface.co/api/daily_papers"
+
+
+def fetch_hf_daily_papers() -> list[PaperCandidate]:
+    """Fetch today's community-curated papers from HuggingFace."""
+    papers: list[PaperCandidate] = []
+    with _build_paper_client() as client:
+        try:
+            resp = client.get(HF_DAILY_PAPERS_URL)
+            resp.raise_for_status()
+        except httpx.HTTPError as exc:
+            log.warning("Failed to fetch HuggingFace daily papers: %s", exc)
+            return papers
+
+    for item in resp.json():
+        paper_data = item.get("paper", {})
+        arxiv_id = paper_data.get("id", "")
+        if not arxiv_id:
+            continue
+
+        title = " ".join(paper_data.get("title", "").split())
+        abstract = " ".join(paper_data.get("summary", "").split())
+        published = paper_data.get("publishedAt", "")
+
+        papers.append(
+            PaperCandidate(
+                arxiv_id=arxiv_id,
+                title=title,
+                abstract=abstract,
+                published=published,
+                pdf_url=f"https://arxiv.org/pdf/{arxiv_id}",
+                categories="",
+                hf_trending=True,
+            )
+        )
+
+    log.info("Fetched %d papers from HuggingFace Daily Papers", len(papers))
+    return papers
+
+
 def summarize(text: str, source: str) -> str:
     """Ask the model to return a compact HTML snippet summarising raw GitHub API JSON."""
     hint = _hint_for(source)

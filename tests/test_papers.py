@@ -5,7 +5,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from dtech import _source_category, fetch_arxiv_papers, nice_source_label
+import json as json_mod
+
+from dtech import _source_category, fetch_arxiv_papers, fetch_hf_daily_papers, nice_source_label
 
 
 def test_source_category_arxiv():
@@ -75,3 +77,55 @@ def test_fetch_arxiv_papers_parses_xml(monkeypatch):
     assert p.pdf_url == "http://arxiv.org/pdf/2403.12345v1"
     assert "cs.LG" in p.categories
     assert p.hf_trending is False
+
+
+SAMPLE_HF_JSON = json_mod.dumps([
+    {
+        "title": "HF Trending Paper About Agents",
+        "paper": {
+            "id": "2403.67890",
+            "title": "HF Trending Paper About Agents",
+            "summary": "This paper explores new agent architectures for LLMs.",
+            "publishedAt": "2026-03-27T12:00:00.000Z",
+        },
+        "numUpvotes": 42,
+    },
+    {
+        "title": "Another Paper",
+        "paper": {
+            "id": "2403.11111",
+            "title": "Another Paper",
+            "summary": "A second paper about fine-tuning.",
+            "publishedAt": "2026-03-26T08:00:00.000Z",
+        },
+        "numUpvotes": 10,
+    },
+])
+
+
+def test_fetch_hf_daily_papers_parses_json(monkeypatch):
+    """Test that HF Daily Papers JSON is correctly parsed."""
+
+    class FakeResponse:
+        status_code = 200
+        text = SAMPLE_HF_JSON
+        def raise_for_status(self):
+            pass
+        def json(self):
+            return json_mod.loads(self.text)
+
+    class FakeClient:
+        def get(self, url, **kwargs):
+            return FakeResponse()
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            pass
+
+    monkeypatch.setattr("dtech._build_paper_client", lambda: FakeClient())
+
+    papers = fetch_hf_daily_papers()
+    assert len(papers) == 2
+    assert papers[0].arxiv_id == "2403.67890"
+    assert papers[0].hf_trending is True
+    assert "agent architectures" in papers[0].abstract
