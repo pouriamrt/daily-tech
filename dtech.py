@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import json  # noqa: F401  (used by upcoming paper-fetch tasks)
 import logging
 import os
 import sqlite3
+import xml.etree.ElementTree as ET  # noqa: F401  (used by upcoming paper-fetch tasks)
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -108,6 +110,17 @@ class KnowledgeEntry:
     summary: str
 
 
+@dataclass(frozen=True)
+class PaperCandidate:
+    arxiv_id: str
+    title: str
+    abstract: str
+    published: str
+    pdf_url: str
+    categories: str
+    hf_trending: bool = False
+
+
 def _init_db() -> None:
     """Create the knowledge table if it doesn't exist."""
     with sqlite3.connect(DB_PATH) as conn:
@@ -205,6 +218,8 @@ def store(entry: KnowledgeEntry) -> None:
 
 def nice_source_label(url: str) -> str:
     """Turn a GitHub API URL into a readable label, e.g. 'anthropics/claude-code · releases'."""
+    if url.startswith("arxiv:"):
+        return url.replace("arxiv:", "arXiv · ")
     path = urlparse(url).path.strip("/")
     parts = path.split("/")
     if len(parts) >= 4 and parts[0] == "repos":
@@ -217,6 +232,8 @@ def nice_source_label(url: str) -> str:
 
 def _source_category(url: str) -> str:
     """Classify a source URL into a category for visual grouping."""
+    if url.startswith("arxiv:"):
+        return "paper"
     if "/search/repositories" in url:
         if "topic:machine-learning" in url:
             return "ml"
@@ -279,6 +296,14 @@ _CATEGORY_META: dict[str, tuple[str, str, str]] = {
             '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1'
             '-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/>'
             '<line x1="7" y1="7" x2="7.01" y2="7"/>'
+        ),
+    ),
+    "paper": (
+        "Research Papers",
+        "#0891b2",
+        _svg(
+            '<path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>'
+            '<path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"/>'
         ),
     ),
     "other": (
