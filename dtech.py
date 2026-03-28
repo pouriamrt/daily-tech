@@ -335,7 +335,7 @@ def rank_papers(candidates: list[PaperCandidate], top_n: int = 5) -> list[PaperC
         return []
 
     paper_list = "\n\n".join(
-        f"[{i+1}] ID: {p.arxiv_id} | Title: {p.title}"
+        f"[{i + 1}] ID: {p.arxiv_id} | Title: {p.title}"
         f"{' | HF-TRENDING' if p.hf_trending else ''}"
         f"\nAbstract: {p.abstract[:500]}"
         for i, p in enumerate(candidates)
@@ -372,6 +372,37 @@ PAPERS:
         return candidates[:top_n]
 
     return selected
+
+
+def summarize_paper(paper: PaperCandidate) -> str:
+    """LLM Pass 2: generate a structured HTML summary for a single paper."""
+    prompt = f"""You are writing a research paper briefing for a Python/AI developer.
+
+PAPER TITLE: {paper.title}
+ABSTRACT: {paper.abstract}
+
+Generate a structured HTML fragment (no markdown, no backticks, no <html>/<body> tags).
+Do NOT include authors. Structure:
+
+<h3>{paper.title}</h3>
+<p class="paper-tldr"><em>One-sentence TL;DR of what this paper does.</em></p>
+<h4>Key Methodology</h4>
+<ul>
+  <li>2-3 bullets explaining their approach, technique, or architecture</li>
+  <li>Focus on what's novel and how it works at a high level</li>
+</ul>
+<h4>Why It Matters For You</h4>
+<ul>
+  <li>1-2 bullets on practical takeaways for someone building with LLMs,
+  agents, or ML pipelines in Python</li>
+</ul>
+<p><a href="https://arxiv.org/abs/{paper.arxiv_id}">arXiv</a> &middot;
+<a href="{paper.pdf_url}">PDF</a></p>
+
+Keep it concise and useful. Focus on methodology, not hype."""
+
+    response = model.invoke(prompt)
+    return response.content
 
 
 def summarize(text: str, source: str) -> str:
