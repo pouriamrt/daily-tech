@@ -1439,17 +1439,15 @@ def generate_html_report() -> None:
                 const hide = f !== 'all' && c.dataset.cat !== f;
                 c.classList.toggle('hidden', hide);
             }});
-            /* Hide section wrappers when they have no visible cards */
+            /* Show paper section only when papers are visible */
             if (paperSec) {{
-                const hasPaper = f === 'all' || f === 'paper';
-                paperSec.classList.toggle('hidden', !hasPaper);
+                paperSec.classList.toggle('hidden',
+                    f !== 'all' && f !== 'paper');
             }}
+            /* Show GitHub divider only when non-paper cards are visible */
             if (ghDiv) {{
-                const hasGh = f === 'all'
-                    || (f !== 'paper' && document.querySelectorAll(
-                        '.card:not(.hidden):not([data-cat="paper"])'
-                    ).length > 0);
-                ghDiv.classList.toggle('hidden', !hasGh);
+                ghDiv.classList.toggle('hidden',
+                    f === 'paper');
             }}
         }}
 
