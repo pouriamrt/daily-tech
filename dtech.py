@@ -1431,17 +1431,34 @@ def generate_html_report() -> None:
         /* ── Filter logic ── */
         const btns = document.querySelectorAll('.filter-btn');
         const cards = document.querySelectorAll('.card');
+        const paperSec = document.querySelector('.paper-section');
+        const ghDiv = document.querySelector('.github-section-divider');
+
+        function applyFilter(f) {{
+            cards.forEach(c => {{
+                const hide = f !== 'all' && c.dataset.cat !== f;
+                c.classList.toggle('hidden', hide);
+            }});
+            /* Hide section wrappers when they have no visible cards */
+            if (paperSec) {{
+                const hasPaper = f === 'all' || f === 'paper';
+                paperSec.classList.toggle('hidden', !hasPaper);
+            }}
+            if (ghDiv) {{
+                const hasGh = f === 'all'
+                    || (f !== 'paper' && document.querySelectorAll(
+                        '.card:not(.hidden):not([data-cat="paper"])'
+                    ).length > 0);
+                ghDiv.classList.toggle('hidden', !hasGh);
+            }}
+        }}
+
         btns.forEach(btn => {{
             btn.addEventListener('click', () => {{
                 btns.forEach(b =>
                     b.classList.remove('active'));
                 btn.classList.add('active');
-                const f = btn.dataset.filter;
-                cards.forEach(c => {{
-                    const hide = f !== 'all'
-                        && c.dataset.cat !== f;
-                    c.classList.toggle('hidden', hide);
-                }});
+                applyFilter(btn.dataset.filter);
             }});
         }});
 
