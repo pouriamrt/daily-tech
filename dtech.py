@@ -615,15 +615,18 @@ _CATEGORY_META: dict[str, tuple[str, str, str]] = {
 def generate_html_report() -> None:
     """Read knowledge DB and render a styled HTML dashboard."""
     _init_db()
+    today = datetime.now().strftime("%Y-%m-%d")
     with sqlite3.connect(DB_PATH) as conn:
         conn.row_factory = sqlite3.Row
         paper_rows = conn.execute(
             "SELECT timestamp, source, summary FROM knowledge "
-            "WHERE source LIKE 'arxiv:%' ORDER BY timestamp DESC LIMIT 10"
+            "WHERE source LIKE 'arxiv:%' AND date = ? ORDER BY timestamp DESC",
+            (today,),
         ).fetchall()
         github_rows = conn.execute(
             "SELECT timestamp, source, summary FROM knowledge "
-            "WHERE source NOT LIKE 'arxiv:%' ORDER BY timestamp DESC LIMIT 20"
+            "WHERE source NOT LIKE 'arxiv:%' AND date = ? ORDER BY timestamp DESC",
+            (today,),
         ).fetchall()
     paper_items = [dict(r) for r in paper_rows]
     items = [dict(r) for r in github_rows]
@@ -658,22 +661,22 @@ def generate_html_report() -> None:
     # Build paper section
     paper_section = ""
     if paper_items:
+        paper_count = len(paper_items)
+        paper_icon = _CATEGORY_META["paper"][2]
         paper_section += (
             '\n        <section class="paper-section">'
             '\n            <div class="section-divider">'
-            '\n                <span class="section-divider-icon" style="--accent:#0891b2">'
-            f"\n                    {_CATEGORY_META['paper'][2]} Research Papers"
+            '\n                <span class="section-divider-icon">'
+            f"\n                    {paper_icon} Research Papers"
+            f'\n                    <span class="section-divider-count">'
+            f"{paper_count} papers</span>"
             "\n                </span>"
             "\n            </div>"
         )
 
         for idx, item in enumerate(paper_items):
-            ts = datetime.fromisoformat(item["timestamp"])
-            human_time = ts.strftime("%b %d, %Y &middot; %H:%M")
             source_label = nice_source_label(item["source"])
             color = "#0891b2"
-            label = "Research Papers"
-            icon = _CATEGORY_META["paper"][2]
 
             delay = idx * 60
             paper_section += f"""
@@ -682,11 +685,7 @@ def generate_html_report() -> None:
                 <div class="card-accent"></div>
                 <div class="card-inner">
                     <div class="card-header">
-                        <div class="card-meta">
-                            <span class="badge" style="--accent:{color}">{icon} {label}</span>
-                            <span class="source-label">{source_label}</span>
-                        </div>
-                        <time class="time">{human_time}</time>
+                        <span class="source-label">{source_label}</span>
                     </div>
                     <div class="summary">{item["summary"]}</div>
                 </div>
@@ -721,6 +720,7 @@ def generate_html_report() -> None:
         </article>"""
 
     total = len(paper_items) + len(items)
+    github_count = len(items)
     gfonts = (
         "https://fonts.googleapis.com/css2"
         "?family=Inter:wght@400;500;600;700;800"
@@ -866,6 +866,13 @@ def generate_html_report() -> None:
             font-size: 14px;
             color: var(--text-muted);
         }}
+        .header-subtitle {{
+            font-size: 15px;
+            color: var(--text-secondary);
+            font-weight: 400;
+            margin-top: 4px;
+            opacity: 0.8;
+        }}
 
         /* ── Stats bar ── */
         .stats {{
@@ -959,59 +966,129 @@ def generate_html_report() -> None:
 
         /* ── Paper section ── */
         .paper-section {{
-            margin-bottom: 40px;
+            margin-bottom: 48px;
+            padding: 28px 24px 24px;
+            background: linear-gradient(
+                135deg,
+                rgba(8,145,178,0.03) 0%,
+                rgba(6,182,212,0.06) 100%
+            );
+            border-radius: var(--radius-lg);
+            border: 1px solid rgba(8,145,178,0.1);
         }}
         .section-divider {{
             display: flex;
             align-items: center;
             gap: 12px;
             margin-bottom: 24px;
-            padding-bottom: 12px;
-            border-bottom: 2px solid rgba(8, 145, 178, 0.15);
+            padding-bottom: 14px;
+            border-bottom: 2px solid rgba(8, 145, 178, 0.12);
         }}
         .section-divider-icon {{
             display: inline-flex;
             align-items: center;
-            gap: 8px;
-            font-size: 18px;
-            font-weight: 700;
+            gap: 10px;
+            font-size: 20px;
+            font-weight: 800;
             color: #0891b2;
-            letter-spacing: -0.01em;
+            letter-spacing: -0.02em;
         }}
         .section-divider-icon svg {{
-            opacity: 0.85;
+            opacity: 0.9;
+            width: 20px;
+            height: 20px;
+        }}
+        .section-divider-count {{
+            font-size: 13px;
+            font-weight: 500;
+            color: #0e7490;
+            opacity: 0.7;
+            margin-left: 4px;
+        }}
+
+        /* Paper cards: override h3 to be a proper title */
+        .paper-section .summary h3 {{
+            font-size: 19px;
+            font-weight: 700;
+            color: var(--text-primary);
+            text-transform: none;
+            letter-spacing: -0.01em;
+            margin: 0 0 6px;
+            padding-bottom: 0;
+            border-bottom: none;
+            display: block;
+            line-height: 1.35;
         }}
         .summary .paper-tldr {{
             font-style: italic;
             color: var(--text-secondary);
-            font-size: 15px;
-            margin: 0 0 16px;
+            font-size: 14.5px;
+            margin: 0 0 18px;
+            line-height: 1.6;
         }}
         .summary h4 {{
-            font-size: 12.5px;
-            font-weight: 600;
+            font-size: 11.5px;
+            font-weight: 700;
             color: color-mix(
-                in srgb, var(--accent) 80%, #1a1a2e
+                in srgb, var(--accent) 85%, #1a1a2e
             );
             text-transform: uppercase;
-            letter-spacing: 0.06em;
-            margin: 18px 0 8px;
+            letter-spacing: 0.08em;
+            margin: 20px 0 8px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid
+                color-mix(in srgb, var(--accent) 15%, transparent);
         }}
 
-        /* ── GitHub section divider ── */
+        /* Paper link pills */
+        .paper-section .summary > p:last-child {{
+            margin-top: 18px;
+            margin-bottom: 0;
+            display: flex;
+            gap: 10px;
+        }}
+        .paper-section .summary > p:last-child a {{
+            display: inline-flex;
+            align-items: center;
+            padding: 5px 14px;
+            border-radius: 999px;
+            font-size: 13px;
+            font-weight: 600;
+            background: rgba(8,145,178,0.08);
+            color: #0891b2;
+            border: 1px solid rgba(8,145,178,0.18);
+            border-bottom: 1px solid rgba(8,145,178,0.18);
+            transition: all 0.2s;
+        }}
+        .paper-section .summary > p:last-child a:hover {{
+            background: rgba(8,145,178,0.14);
+            color: #0e7490;
+            border-color: rgba(8,145,178,0.3);
+        }}
+
+        /* ── Section dividers ── */
         .github-section-divider {{
             display: flex;
             align-items: center;
-            gap: 12px;
-            margin-bottom: 24px;
-            padding-bottom: 12px;
+            gap: 10px;
+            margin-bottom: 28px;
+            padding-bottom: 14px;
             border-bottom: 2px solid rgba(0, 0, 0, 0.06);
         }}
+        .github-section-divider svg {{
+            opacity: 0.6;
+        }}
         .github-section-divider span {{
-            font-size: 18px;
-            font-weight: 700;
+            font-size: 20px;
+            font-weight: 800;
             color: var(--text-primary);
-            letter-spacing: -0.01em;
+            letter-spacing: -0.02em;
+        }}
+        .github-section-divider .section-count {{
+            font-size: 13px;
+            font-weight: 500;
+            color: var(--text-muted);
+            margin-left: 4px;
         }}
 
         .card-accent {{
@@ -1283,8 +1360,16 @@ def generate_html_report() -> None:
             }}
             .summary {{ font-size: 15px; }}
             .summary h2 {{ font-size: 19px; }}
+            .paper-section .summary h3 {{ font-size: 17px; }}
             .filter-btn {{
                 padding: 8px 14px;
+            }}
+            .paper-section {{
+                padding: 20px 16px 18px;
+                margin-bottom: 36px;
+            }}
+            .section-divider-icon {{
+                font-size: 17px;
             }}
         }}
     </style>
@@ -1302,7 +1387,7 @@ def generate_html_report() -> None:
             </div>
             <h1 class="header-title">Daily Tech Intelligence</h1>
             <p class="header-date">{today_str}</p>
-            <p class="header-count">{total} briefings</p>
+            <p class="header-count">{total} briefings today</p>
         </header>
 
         <div class="stats">{stat_pills}</div>
@@ -1311,7 +1396,19 @@ def generate_html_report() -> None:
 {paper_section}
 
         <div class="github-section-divider">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                 stroke="currentColor" stroke-width="2">
+                <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37
+                3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54
+                6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07
+                0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38
+                0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07
+                0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0
+                5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9
+                18.13V22"/>
+            </svg>
             <span>GitHub Activity</span>
+            <span class="section-count">{github_count} sources</span>
         </div>
 
 {cards}
