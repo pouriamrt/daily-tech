@@ -23,9 +23,7 @@ def test_source_category_arxiv():
 
 
 def test_source_category_github_unchanged():
-    assert _source_category(
-        "https://api.github.com/repos/fastapi/fastapi/releases"
-    ) == "release"
+    assert _source_category("https://api.github.com/repos/fastapi/fastapi/releases") == "release"
 
 
 def test_nice_source_label_arxiv():
@@ -63,14 +61,17 @@ def test_fetch_arxiv_papers_parses_xml(monkeypatch):
     class FakeResponse:
         status_code = 200
         text = SAMPLE_ARXIV_XML
+
         def raise_for_status(self):
             pass
 
     class FakeClient:
         def get(self, url, **kwargs):
             return FakeResponse()
+
         def __enter__(self):
             return self
+
         def __exit__(self, *args):
             pass
 
@@ -87,28 +88,30 @@ def test_fetch_arxiv_papers_parses_xml(monkeypatch):
     assert p.hf_trending is False
 
 
-SAMPLE_HF_JSON = json_mod.dumps([
-    {
-        "title": "HF Trending Paper About Agents",
-        "paper": {
-            "id": "2403.67890",
+SAMPLE_HF_JSON = json_mod.dumps(
+    [
+        {
             "title": "HF Trending Paper About Agents",
-            "summary": "This paper explores new agent architectures for LLMs.",
-            "publishedAt": "2026-03-27T12:00:00.000Z",
+            "paper": {
+                "id": "2403.67890",
+                "title": "HF Trending Paper About Agents",
+                "summary": "This paper explores new agent architectures for LLMs.",
+                "publishedAt": "2026-03-27T12:00:00.000Z",
+            },
+            "numUpvotes": 42,
         },
-        "numUpvotes": 42,
-    },
-    {
-        "title": "Another Paper",
-        "paper": {
-            "id": "2403.11111",
+        {
             "title": "Another Paper",
-            "summary": "A second paper about fine-tuning.",
-            "publishedAt": "2026-03-26T08:00:00.000Z",
+            "paper": {
+                "id": "2403.11111",
+                "title": "Another Paper",
+                "summary": "A second paper about fine-tuning.",
+                "publishedAt": "2026-03-26T08:00:00.000Z",
+            },
+            "numUpvotes": 10,
         },
-        "numUpvotes": 10,
-    },
-])
+    ]
+)
 
 
 def test_fetch_hf_daily_papers_parses_json(monkeypatch):
@@ -117,16 +120,20 @@ def test_fetch_hf_daily_papers_parses_json(monkeypatch):
     class FakeResponse:
         status_code = 200
         text = SAMPLE_HF_JSON
+
         def raise_for_status(self):
             pass
+
         def json(self):
             return json_mod.loads(self.text)
 
     class FakeClient:
         def get(self, url, **kwargs):
             return FakeResponse()
+
         def __enter__(self):
             return self
+
         def __exit__(self, *args):
             pass
 
@@ -195,8 +202,7 @@ def test_deduplicate_papers_merges_by_arxiv_id():
 
 def test_parse_ranked_ids_valid_json():
     raw = (
-        '[{"arxiv_id": "2403.111", "reason": "good"},'
-        ' {"arxiv_id": "2403.222", "reason": "great"}]'
+        '[{"arxiv_id": "2403.111", "reason": "good"}, {"arxiv_id": "2403.222", "reason": "great"}]'
     )
     assert _parse_ranked_ids(raw) == ["2403.111", "2403.222"]
 

@@ -1419,6 +1419,7 @@ def fetch_and_process(days: int = 7) -> None:
 
 
 if __name__ == "__main__":
+    fetch_and_process_papers()
     fetch_and_process(days=7)
     generate_html_report()
     print("🧠 Daily knowledge added.")
