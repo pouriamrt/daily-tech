@@ -160,7 +160,7 @@ def _hint_for(url: str) -> str:
 ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 
 ARXIV_QUERY = (
-    "http://export.arxiv.org/api/query"
+    "https://export.arxiv.org/api/query"
     "?search_query=cat:cs.AI+OR+cat:cs.LG+OR+cat:cs.CL"
     "&sortBy=submittedDate&sortOrder=descending&max_results=20"
 )
@@ -1422,5 +1422,5 @@ if __name__ == "__main__":
     fetch_and_process_papers()
     fetch_and_process(days=7)
     generate_html_report()
-    print("🧠 Daily knowledge added.")
+    print("Daily knowledge added.")
     os.startfile(REPORT_PATH)
