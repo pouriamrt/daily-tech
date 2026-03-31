@@ -6,6 +6,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 import json as json_mod
+from unittest.mock import MagicMock, patch
 
 from dtech import (
     PaperCandidate,
@@ -15,6 +16,7 @@ from dtech import (
     fetch_arxiv_papers,
     fetch_hf_daily_papers,
     nice_source_label,
+    summarize_paper,
 )
 
 
@@ -219,8 +221,6 @@ def test_parse_ranked_ids_strips_markdown_fences():
 
 def test_summarize_paper_prompt_includes_mermaid_instruction():
     """The paper summarization prompt should instruct LLM to optionally include Mermaid."""
-    from unittest.mock import MagicMock, patch
-
     paper = PaperCandidate(
         arxiv_id="2403.00001",
         title="Test Paper",
@@ -235,7 +235,6 @@ def test_summarize_paper_prompt_includes_mermaid_instruction():
 
     with patch("dtech.model") as mock_model:
         mock_model.invoke.return_value = mock_response
-        from dtech import summarize_paper
         summarize_paper(paper)
 
         prompt_sent = mock_model.invoke.call_args[0][0]
