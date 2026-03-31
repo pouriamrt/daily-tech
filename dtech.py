@@ -891,9 +891,29 @@ def generate_html_report() -> None:
                 </svg>
                 <span class="connections-header-title">Today's Connections</span>
             </div>
-            <pre class="mermaid">
+            <div style="position:relative">
+                <div class="zoom-controls">
+                    <button class="zoom-btn" id="zoomIn" title="Zoom in">+</button>
+                    <button class="zoom-btn" id="zoomOut" title="Zoom out">&minus;</button>
+                    <button class="zoom-btn" id="zoomReset" title="Fit to view">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+                             stroke="currentColor" stroke-width="2.5">
+                            <polyline points="15 3 21 3 21 9"/>
+                            <polyline points="9 21 3 21 3 15"/>
+                            <line x1="21" y1="3" x2="14" y2="10"/>
+                            <line x1="3" y1="21" x2="10" y2="14"/>
+                        </svg>
+                    </button>
+                </div>
+                <div class="zoom-hint" id="zoomHint">Scroll to zoom &middot; Drag to pan</div>
+                <div class="zoom-viewport" id="zoomViewport">
+                    <div class="zoom-inner" id="zoomInner">
+                        <pre class="mermaid" id="connMermaid">
 {relationship_map}
-            </pre>
+                        </pre>
+                    </div>
+                </div>
+            </div>
         </section>"""
 
     total = len(paper_items) + len(items)
@@ -989,7 +1009,7 @@ def generate_html_report() -> None:
         .wrapper {{
             position: relative;
             z-index: 1;
-            max-width: 920px;
+            max-width: 1120px;
             margin: 0 auto;
             padding: 56px 24px 100px;
         }}
@@ -1634,14 +1654,72 @@ def generate_html_report() -> None:
         .connections-section pre.mermaid {{
             background: rgba(255,255,255,0.6);
             border: 1px solid rgba(167,139,250,0.12);
-            border-radius: var(--radius-md);
-            padding: 32px 24px;
+            border-radius: var(--radius-lg);
+            padding: 0;
             margin: 0;
             text-align: center;
-            overflow-x: auto;
         }}
         .connections-section pre.mermaid::before {{
             content: none;
+        }}
+        .connections-section .zoom-viewport {{
+            width: 100%;
+            height: 500px;
+            overflow: hidden;
+            position: relative;
+            cursor: grab;
+        }}
+        .connections-section .zoom-viewport:active {{
+            cursor: grabbing;
+        }}
+        .connections-section .zoom-viewport .zoom-inner {{
+            transform-origin: 0 0;
+            display: inline-block;
+        }}
+        .connections-section .zoom-controls {{
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            display: flex;
+            gap: 4px;
+            z-index: 10;
+        }}
+        .connections-section .zoom-btn {{
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            border: 1px solid rgba(167,139,250,0.2);
+            background: rgba(255,255,255,0.9);
+            color: #6366f1;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+            font-family: var(--font-sans);
+            backdrop-filter: blur(8px);
+        }}
+        .connections-section .zoom-btn:hover {{
+            background: #ede9fe;
+            border-color: #a78bfa;
+        }}
+        .connections-section .zoom-hint {{
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 11px;
+            color: #9ca3af;
+            background: rgba(255,255,255,0.85);
+            padding: 3px 10px;
+            border-radius: 6px;
+            pointer-events: none;
+            z-index: 10;
+            backdrop-filter: blur(4px);
+            opacity: 1;
+            transition: opacity 0.5s;
         }}
         .connections-header {{
             display: flex;
@@ -1811,6 +1889,97 @@ def generate_html_report() -> None:
                     'rel', 'noopener noreferrer'
                 );
             }});
+
+        /* ── Pan & Zoom for connections diagram ── */
+        (function() {{
+            const vp = document.getElementById('zoomViewport');
+            const inner = document.getElementById('zoomInner');
+            if (!vp || !inner) return;
+
+            let scale = 1, panX = 0, panY = 0, dragging = false;
+            let startX, startY, startPanX, startPanY;
+            const MIN_SCALE = 0.2, MAX_SCALE = 20;
+
+            function apply() {{
+                inner.style.transform =
+                    `translate(${{panX}}px, ${{panY}}px) scale(${{scale}})`;
+            }}
+
+            function fitToView() {{
+                /* Reset transform to measure natural size */
+                inner.style.transform = 'none';
+                const rect = inner.getBoundingClientRect();
+                const vpW = vp.clientWidth;
+                const vpH = vp.clientHeight;
+                const natW = rect.width;
+                const natH = rect.height;
+                if (natW === 0 || natH === 0) return;
+                scale = Math.min(vpW / natW, vpH / natH) * 0.92;
+                panX = (vpW - natW * scale) / 2;
+                panY = (vpH - natH * scale) / 2;
+                apply();
+            }}
+
+            /* Wait for Mermaid to render, then fit */
+            const observer = new MutationObserver(() => {{
+                if (inner.querySelector('svg')) {{
+                    observer.disconnect();
+                    setTimeout(fitToView, 100);
+                }}
+            }});
+            observer.observe(inner, {{ childList: true, subtree: true }});
+
+            /* Wheel zoom */
+            vp.addEventListener('wheel', (e) => {{
+                e.preventDefault();
+                const rect = vp.getBoundingClientRect();
+                const mx = e.clientX - rect.left;
+                const my = e.clientY - rect.top;
+                const delta = e.deltaY > 0 ? 0.9 : 1.1;
+                const ns = Math.min(MAX_SCALE,
+                    Math.max(MIN_SCALE, scale * delta));
+                const r = ns / scale;
+                panX = mx - r * (mx - panX);
+                panY = my - r * (my - panY);
+                scale = ns;
+                apply();
+                const hint = document.getElementById('zoomHint');
+                if (hint) hint.style.opacity = '0';
+            }}, {{ passive: false }});
+
+            /* Drag to pan */
+            vp.addEventListener('mousedown', (e) => {{
+                dragging = true;
+                startX = e.clientX; startY = e.clientY;
+                startPanX = panX; startPanY = panY;
+                e.preventDefault();
+            }});
+            window.addEventListener('mousemove', (e) => {{
+                if (!dragging) return;
+                panX = startPanX + (e.clientX - startX);
+                panY = startPanY + (e.clientY - startY);
+                apply();
+            }});
+            window.addEventListener('mouseup', () => {{ dragging = false; }});
+
+            /* Button controls */
+            function zoomAt(factor) {{
+                const cx = vp.clientWidth / 2, cy = vp.clientHeight / 2;
+                const ns = Math.min(MAX_SCALE,
+                    Math.max(MIN_SCALE, scale * factor));
+                const r = ns / scale;
+                panX = cx - r * (cx - panX);
+                panY = cy - r * (cy - panY);
+                scale = ns;
+                apply();
+            }}
+            const zi = document.getElementById('zoomIn');
+            const zo = document.getElementById('zoomOut');
+            const zr = document.getElementById('zoomReset');
+            if (zi) zi.addEventListener('click', () => zoomAt(1.3));
+            if (zo) zo.addEventListener('click', () => zoomAt(0.75));
+            if (zr) zr.addEventListener('click', fitToView);
+        }})();
     </script>
 </body>
 </html>"""
