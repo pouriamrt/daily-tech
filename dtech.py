@@ -534,7 +534,9 @@ def _extract_title_from_summary(summary: str) -> str:
         start = summary.find(f"<{tag}>")
         end = summary.find(f"</{tag}>")
         if start != -1 and end != -1:
-            return summary[start + len(tag) + 2 : end].strip()
+            text = summary[start + len(tag) + 2 : end].strip()
+            if text:
+                return text
     return summary[:80]
 
 

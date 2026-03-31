@@ -11,7 +11,6 @@ import json as json_mod
 from unittest.mock import MagicMock, patch
 
 from dtech import (
-    DB_PATH,
     KnowledgeEntry,
     PaperCandidate,
     _init_db,
@@ -282,16 +281,20 @@ def test_generate_relationship_map_stores_entry(tmp_path, monkeypatch):
     test_db = _setup_test_db(tmp_path, monkeypatch)
     today = datetime.now().strftime("%Y-%m-%d")
 
-    store(KnowledgeEntry(
-        timestamp=datetime.now().isoformat(),
-        source="arxiv:2403.00001",
-        summary="<h3>Paper About Agents</h3>",
-    ))
-    store(KnowledgeEntry(
-        timestamp=datetime.now().isoformat(),
-        source="https://api.github.com/repos/langchain-ai/langchain/releases",
-        summary="<h2>LangChain 1.3</h2>",
-    ))
+    store(
+        KnowledgeEntry(
+            timestamp=datetime.now().isoformat(),
+            source="arxiv:2403.00001",
+            summary="<h3>Paper About Agents</h3>",
+        )
+    )
+    store(
+        KnowledgeEntry(
+            timestamp=datetime.now().isoformat(),
+            source="https://api.github.com/repos/langchain-ai/langchain/releases",
+            summary="<h2>LangChain 1.3</h2>",
+        )
+    )
 
     mermaid_code = "graph TD\n  P1[Paper About Agents] -.->|uses| R1[LangChain 1.3]"
     mock_response = MagicMock()
@@ -314,16 +317,20 @@ def test_generate_relationship_map_skips_when_none(tmp_path, monkeypatch):
     """When LLM returns NONE, no meta entry is stored."""
     test_db = _setup_test_db(tmp_path, monkeypatch)
 
-    store(KnowledgeEntry(
-        timestamp=datetime.now().isoformat(),
-        source="arxiv:2403.00001",
-        summary="<h3>Paper About Agents</h3>",
-    ))
-    store(KnowledgeEntry(
-        timestamp=datetime.now().isoformat(),
-        source="https://api.github.com/repos/test/repo/releases",
-        summary="<h2>Some Release</h2>",
-    ))
+    store(
+        KnowledgeEntry(
+            timestamp=datetime.now().isoformat(),
+            source="arxiv:2403.00001",
+            summary="<h3>Paper About Agents</h3>",
+        )
+    )
+    store(
+        KnowledgeEntry(
+            timestamp=datetime.now().isoformat(),
+            source="https://api.github.com/repos/test/repo/releases",
+            summary="<h2>Some Release</h2>",
+        )
+    )
 
     mock_response = MagicMock()
     mock_response.content = "NONE"
@@ -343,11 +350,13 @@ def test_generate_relationship_map_skips_if_already_exists(tmp_path, monkeypatch
     """Should not call LLM if relationship map already exists for today."""
     _setup_test_db(tmp_path, monkeypatch)
 
-    store(KnowledgeEntry(
-        timestamp=datetime.now().isoformat(),
-        source="meta:relationship-map",
-        summary="graph TD\n  A --> B",
-    ))
+    store(
+        KnowledgeEntry(
+            timestamp=datetime.now().isoformat(),
+            source="meta:relationship-map",
+            summary="graph TD\n  A --> B",
+        )
+    )
 
     with patch("dtech.model") as mock_model:
         generate_relationship_map()
