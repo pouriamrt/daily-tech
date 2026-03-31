@@ -396,6 +396,15 @@ Do NOT include authors. Structure:
   <li>1-2 bullets on practical takeaways for someone building with LLMs,
   agents, or ML pipelines in Python</li>
 </ul>
+If a visual diagram would help explain this paper's methodology (architecture, training
+pipeline, data flow), include a Mermaid diagram using:
+<pre class="mermaid">
+graph LR
+  A[Step 1] --> B[Step 2]
+</pre>
+Place the diagram after the Key Methodology section. If the methodology is simple or a
+diagram would not add clarity, do NOT include one.
+
 <p><a href="https://arxiv.org/abs/{paper.arxiv_id}">arXiv</a> &middot;
 <a href="{paper.pdf_url}">PDF</a></p>
 

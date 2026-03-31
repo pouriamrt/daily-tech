@@ -215,3 +215,29 @@ def test_parse_ranked_ids_invalid_json():
 def test_parse_ranked_ids_strips_markdown_fences():
     raw = '```json\n[{"arxiv_id": "2403.333", "reason": "nice"}]\n```'
     assert _parse_ranked_ids(raw) == ["2403.333"]
+
+
+def test_summarize_paper_prompt_includes_mermaid_instruction():
+    """The paper summarization prompt should instruct LLM to optionally include Mermaid."""
+    from unittest.mock import MagicMock, patch
+
+    paper = PaperCandidate(
+        arxiv_id="2403.00001",
+        title="Test Paper",
+        abstract="A test abstract about methodology.",
+        published="2026-03-27T00:00:00Z",
+        pdf_url="http://arxiv.org/pdf/2403.00001v1",
+        categories="cs.LG",
+    )
+
+    mock_response = MagicMock()
+    mock_response.content = "<h3>Test Paper</h3><p>Summary</p>"
+
+    with patch("dtech.model") as mock_model:
+        mock_model.invoke.return_value = mock_response
+        from dtech import summarize_paper
+        summarize_paper(paper)
+
+        prompt_sent = mock_model.invoke.call_args[0][0]
+        assert "mermaid" in prompt_sent.lower()
+        assert '<pre class="mermaid">' in prompt_sent
