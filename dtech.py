@@ -595,11 +595,12 @@ def generate_relationship_map() -> None:
 
     with sqlite3.connect(DB_PATH) as conn:
         existing = conn.execute(
-            "SELECT COUNT(*) FROM knowledge WHERE source = 'meta:relationship-map' AND date = ?",
+            "SELECT COUNT(*) FROM knowledge "
+            "WHERE source IN ('meta:relationship-map', 'meta:novel-idea') AND date = ?",
             (today,),
         ).fetchone()
-        if existing[0] > 0:
-            log.info("Relationship map already generated today -- skipping.")
+        if existing[0] >= 2:
+            log.info("Relationship map and novel idea already generated today -- skipping.")
             return
 
         rows = conn.execute(
@@ -659,6 +660,49 @@ Return ONLY the Mermaid code or NONE, no markdown fences, no explanation."""
         )
     )
     log.info("Relationship map generated and stored.")
+
+    # Generate a novel idea from the connections
+    summaries_text = "\n\n".join(
+        f"[{_source_category(row[0]).upper()}] "
+        f"{_extract_title_from_summary(row[1])}\n{row[1][:500]}"
+        for row in rows
+    )
+
+    idea_prompt = f"""You are a creative AI researcher and engineer. Below are today's tech
+briefing items -- research papers, trending repos, and release notes.
+
+{summaries_text}
+
+Based on the CONNECTIONS between these items, propose ONE novel, actionable project idea
+that combines insights from at least 2-3 of today's items in a way that none of them
+individually address. This should be something a Python/AI developer could realistically
+start building.
+
+Return an HTML fragment (no markdown, no backticks). Structure:
+
+<h4>Novel Idea</h4>
+<p class="idea-title"><strong>Title of the idea (one line)</strong></p>
+<p>2-3 sentence description of what this project would do and why it's interesting.
+Reference which of today's items inspired it.</p>
+<h4>Quick Start Sketch</h4>
+<ul>
+<li>2-3 concrete first steps to prototype this</li>
+</ul>
+
+Be specific and practical, not vague. The idea should feel like a genuine insight that
+emerges from combining today's items, not a generic suggestion."""
+
+    idea_response = model.invoke(idea_prompt)
+    idea_content = idea_response.content.strip()
+
+    store(
+        KnowledgeEntry(
+            timestamp=datetime.now().isoformat(),
+            source="meta:novel-idea",
+            summary=idea_content,
+        )
+    )
+    log.info("Novel idea generated and stored.")
 
 
 def nice_source_label(url: str) -> str:
@@ -784,9 +828,14 @@ def generate_html_report() -> None:
             "SELECT summary FROM knowledge WHERE source = 'meta:relationship-map' AND date = ?",
             (today,),
         ).fetchone()
+        novel_idea_row = conn.execute(
+            "SELECT summary FROM knowledge WHERE source = 'meta:novel-idea' AND date = ?",
+            (today,),
+        ).fetchone()
     paper_items = [dict(r) for r in paper_rows]
     items = [dict(r) for r in github_rows]
     relationship_map = relationship_row[0] if relationship_row else ""
+    novel_idea = novel_idea_row[0] if novel_idea_row else ""
 
     today_str = datetime.now().strftime("%A, %B %d, %Y")
 
@@ -913,7 +962,23 @@ def generate_html_report() -> None:
                         </pre>
                     </div>
                 </div>
-            </div>
+            </div>"""
+
+        if novel_idea:
+            connections_section += f"""
+            <div class="novel-idea">
+                <div class="novel-idea-icon">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none"
+                         stroke="#d97706" stroke-width="2">
+                        <path d="M9 18h6M10 22h4M12 2a7 7 0 0 1 4 12.73V17a1 1 0
+                        0 1-1 1H9a1 1 0 0 1-1-1v-2.27A7 7 0 0 1 12 2z"/>
+                    </svg>
+                    <span class="novel-idea-label">Sparked by Today's Connections</span>
+                </div>
+                <div class="novel-idea-content">{novel_idea}</div>
+            </div>"""
+
+        connections_section += """
         </section>"""
 
     total = len(paper_items) + len(items)
@@ -1737,6 +1802,88 @@ def generate_html_report() -> None:
         }}
         .connections-header svg {{
             opacity: 0.8;
+        }}
+
+        /* ── Novel idea ── */
+        .novel-idea {{
+            margin-top: 24px;
+            padding: 24px 28px;
+            background: linear-gradient(
+                135deg,
+                rgba(251,191,36,0.06) 0%,
+                rgba(245,158,11,0.08) 100%
+            );
+            border: 1px solid rgba(217,119,6,0.15);
+            border-radius: var(--radius-md);
+        }}
+        .novel-idea-icon {{
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 16px;
+            padding-bottom: 12px;
+            border-bottom: 1px solid rgba(217,119,6,0.12);
+        }}
+        .novel-idea-label {{
+            font-size: 14px;
+            font-weight: 700;
+            color: #b45309;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+        }}
+        .novel-idea-content {{
+            font-size: 15px;
+            line-height: 1.75;
+            color: var(--text-body);
+        }}
+        .novel-idea-content h4 {{
+            font-size: 13px;
+            font-weight: 700;
+            color: #92400e;
+            text-transform: uppercase;
+            letter-spacing: 0.06em;
+            margin: 18px 0 8px;
+            padding-bottom: 5px;
+            border-bottom: 1px solid rgba(217,119,6,0.1);
+        }}
+        .novel-idea-content h4:first-child {{
+            margin-top: 0;
+        }}
+        .novel-idea-content .idea-title {{
+            font-size: 18px;
+            margin: 0 0 10px;
+        }}
+        .novel-idea-content .idea-title strong {{
+            color: var(--text-primary);
+            font-weight: 700;
+        }}
+        .novel-idea-content p {{
+            margin: 0 0 12px;
+            color: var(--text-secondary);
+        }}
+        .novel-idea-content ul {{
+            margin: 8px 0 0 0;
+            padding-left: 20px;
+            list-style: none;
+        }}
+        .novel-idea-content ul li {{
+            position: relative;
+            padding-left: 6px;
+            margin-bottom: 6px;
+            color: var(--text-body);
+            font-size: 14.5px;
+            line-height: 1.65;
+        }}
+        .novel-idea-content ul li::before {{
+            content: "";
+            position: absolute;
+            left: -14px;
+            top: 10px;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #d97706;
+            opacity: 0.6;
         }}
     </style>
     <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
