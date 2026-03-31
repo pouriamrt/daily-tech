@@ -3,6 +3,7 @@ from __future__ import annotations
 import json  # noqa: F401  (used by upcoming paper-fetch tasks)
 import logging
 import os
+import re
 import sqlite3
 import xml.etree.ElementTree as ET  # noqa: F401  (used by upcoming paper-fetch tasks)
 from dataclasses import dataclass
@@ -400,8 +401,11 @@ If a visual diagram would help explain this paper's methodology (architecture, t
 pipeline, data flow), include a Mermaid diagram using:
 <pre class="mermaid">
 graph LR
-  A[Step 1] --> B[Step 2]
+  A["Step 1"] --> B["Step 2"]
 </pre>
+IMPORTANT Mermaid rules: Always quote node labels with double quotes inside brackets,
+e.g. A["Label here"]. Use only plain text in labels -- no HTML entities, no special
+characters like &, <, >, #, or parentheses. Keep labels short (3-5 words max).
 Place the diagram after the Key Methodology section. If the methodology is simple or a
 diagram would not add clarity, do NOT include one.
 
@@ -411,7 +415,7 @@ diagram would not add clarity, do NOT include one.
 Keep it concise and useful. Focus on methodology, not hype."""
 
     response = model.invoke(prompt)
-    return response.content
+    return _sanitize_mermaid_in_html(response.content)
 
 
 def _papers_fetched_today() -> bool:
@@ -501,8 +505,11 @@ If a visual diagram would help explain this content (architecture overview, comp
 relationships, migration path between versions), include a Mermaid diagram using:
 <pre class="mermaid">
 graph LR
-  A[Component] --> B[Component]
+  A["Component"] --> B["Component"]
 </pre>
+IMPORTANT Mermaid rules: Always quote node labels with double quotes inside brackets,
+e.g. A["Label here"]. Use only plain text in labels -- no HTML entities, no special
+characters like &, <, >, #, or parentheses. Keep labels short (3-5 words max).
 If the content is a simple changelog or list that does not benefit from a diagram, do NOT
 include one. Only add a diagram when it genuinely clarifies the content.
 
@@ -511,7 +518,7 @@ Here is the raw data to summarize:
 {text}
 """
     response = model.invoke(prompt)
-    return response.content
+    return _sanitize_mermaid_in_html(response.content)
 
 
 def store(entry: KnowledgeEntry) -> None:
@@ -538,6 +545,47 @@ def _extract_title_from_summary(summary: str) -> str:
             if text:
                 return text
     return summary[:80]
+
+
+def _sanitize_mermaid(code: str) -> str:
+    """Clean up LLM-generated Mermaid syntax to avoid common parse errors.
+
+    Fixes: unquoted labels containing special chars, HTML entities, unicode symbols.
+    """
+    # Replace HTML entities
+    code = code.replace("&amp;", "and").replace("&lt;", "").replace("&gt;", "")
+
+    # Quote unquoted node labels: A[some label] -> A["some label"]
+    # Matches [...] that isn't already ["..."]
+    def _quote_label(m: re.Match) -> str:
+        bracket_type = m.group(1)  # [ or (
+        label = m.group(2)
+        close = m.group(3)  # ] or )
+        if label.startswith('"') and label.endswith('"'):
+            return f"{bracket_type}{label}{close}"
+        # Strip chars that break Mermaid even inside quotes
+        clean = label.replace('"', "'")
+        return f'{bracket_type}"{clean}"{close}'
+
+    code = re.sub(r"(\[)([^\]]+?)(\])", _quote_label, code)
+    code = re.sub(r"(\()([^)]+?)(\))", _quote_label, code)
+
+    return code
+
+
+def _sanitize_mermaid_in_html(html: str) -> str:
+    """Find all <pre class="mermaid"> blocks in HTML and sanitize their Mermaid content."""
+
+    def _replace_block(m: re.Match) -> str:
+        raw_code = m.group(1)
+        return f'<pre class="mermaid">{_sanitize_mermaid(raw_code)}</pre>'
+
+    return re.sub(
+        r'<pre class="mermaid">(.*?)</pre>',
+        _replace_block,
+        html,
+        flags=re.DOTALL,
+    )
 
 
 def generate_relationship_map() -> None:
@@ -583,6 +631,9 @@ If meaningful connections exist, return a Mermaid graph using this structure:
 - Use dotted arrows -.->|relationship label| for cross-category connections
 - Only include items that have at least one connection
 - Keep labels short (under 5 words)
+- IMPORTANT: Always quote node labels with double quotes, e.g. I1["Label here"]
+- Use only plain text in labels -- no HTML entities, no special characters like &, <, >, #
+- Keep labels short and simple (3-5 words)
 
 If no meaningful connections exist today, return exactly: NONE
 
@@ -604,7 +655,7 @@ Return ONLY the Mermaid code or NONE, no markdown fences, no explanation."""
         KnowledgeEntry(
             timestamp=datetime.now().isoformat(),
             source="meta:relationship-map",
-            summary=content,
+            summary=_sanitize_mermaid(content),
         )
     )
     log.info("Relationship map generated and stored.")
