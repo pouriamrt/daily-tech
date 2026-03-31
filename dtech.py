@@ -497,6 +497,15 @@ Structure:
   <li><a href="...">Label</a></li>
 </ul>
 
+If a visual diagram would help explain this content (architecture overview, component
+relationships, migration path between versions), include a Mermaid diagram using:
+<pre class="mermaid">
+graph LR
+  A[Component] --> B[Component]
+</pre>
+If the content is a simple changelog or list that does not benefit from a diagram, do NOT
+include one. Only add a diagram when it genuinely clarifies the content.
+
 Keep it concise and skimmable.{hint}
 Here is the raw data to summarize:
 {text}

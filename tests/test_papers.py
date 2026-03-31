@@ -16,6 +16,7 @@ from dtech import (
     fetch_arxiv_papers,
     fetch_hf_daily_papers,
     nice_source_label,
+    summarize,
     summarize_paper,
 )
 
@@ -236,6 +237,20 @@ def test_summarize_paper_prompt_includes_mermaid_instruction():
     with patch("dtech.model") as mock_model:
         mock_model.invoke.return_value = mock_response
         summarize_paper(paper)
+
+        prompt_sent = mock_model.invoke.call_args[0][0]
+        assert "mermaid" in prompt_sent.lower()
+        assert '<pre class="mermaid">' in prompt_sent
+
+
+def test_summarize_prompt_includes_mermaid_instruction():
+    """The GitHub summarization prompt should instruct LLM to optionally include Mermaid."""
+    mock_response = MagicMock()
+    mock_response.content = "<h2>Test Repo</h2><p>Summary</p>"
+
+    with patch("dtech.model") as mock_model:
+        mock_model.invoke.return_value = mock_response
+        summarize('{"items": []}', "https://api.github.com/repos/test/repo/releases")
 
         prompt_sent = mock_model.invoke.call_args[0][0]
         assert "mermaid" in prompt_sent.lower()
