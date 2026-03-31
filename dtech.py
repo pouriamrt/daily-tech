@@ -1552,16 +1552,70 @@ def generate_html_report() -> None:
 
         /* ── Mermaid diagrams ── */
         .summary pre.mermaid {{
-            background: var(--bg-deep);
-            border: 1px solid var(--border-subtle);
-            border-radius: var(--radius-md);
-            padding: 20px;
-            margin: 16px 0;
+            background: linear-gradient(
+                135deg,
+                rgba(99,102,241,0.03) 0%,
+                rgba(168,85,247,0.05) 50%,
+                rgba(244,114,182,0.03) 100%
+            );
+            border: 1px solid rgba(167,139,250,0.15);
+            border-radius: var(--radius-lg);
+            padding: 32px 24px;
+            margin: 20px 0;
             text-align: center;
             color: var(--text-body);
+            overflow-x: auto;
         }}
         .summary pre.mermaid::before {{
             content: "diagram";
+            color: #a78bfa;
+            font-weight: 600;
+        }}
+        .summary pre.mermaid svg {{
+            max-width: 100%;
+            height: auto;
+        }}
+        /* Node styling */
+        pre.mermaid .node rect,
+        pre.mermaid .node circle,
+        pre.mermaid .node ellipse,
+        pre.mermaid .node polygon {{
+            rx: 10px !important;
+            ry: 10px !important;
+            filter: drop-shadow(0 2px 4px rgba(99,102,241,0.12));
+            stroke-width: 1.5px !important;
+        }}
+        pre.mermaid .node .label {{
+            font-weight: 500;
+            font-size: 13px !important;
+        }}
+        /* Edge styling */
+        pre.mermaid .edgePath .path {{
+            stroke-width: 1.8px !important;
+            opacity: 0.75;
+        }}
+        pre.mermaid .edgeLabel {{
+            font-size: 11px !important;
+            font-weight: 500;
+            background-color: rgba(255,255,255,0.9) !important;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }}
+        pre.mermaid marker {{
+            fill: #a78bfa;
+        }}
+        /* Subgraph styling */
+        pre.mermaid .cluster rect {{
+            rx: 12px !important;
+            ry: 12px !important;
+            stroke-dasharray: none !important;
+            filter: drop-shadow(0 1px 3px rgba(0,0,0,0.06));
+        }}
+        pre.mermaid .cluster .nodeLabel {{
+            font-weight: 700;
+            font-size: 12px !important;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
         }}
 
         /* ── Connections section ── */
@@ -1575,6 +1629,19 @@ def generate_html_report() -> None:
             );
             border-radius: var(--radius-lg);
             border: 1px solid rgba(99,102,241,0.1);
+            box-shadow: var(--shadow-sm);
+        }}
+        .connections-section pre.mermaid {{
+            background: rgba(255,255,255,0.6);
+            border: 1px solid rgba(167,139,250,0.12);
+            border-radius: var(--radius-md);
+            padding: 32px 24px;
+            margin: 0;
+            text-align: center;
+            overflow-x: auto;
+        }}
+        .connections-section pre.mermaid::before {{
+            content: none;
         }}
         .connections-header {{
             display: flex;
@@ -1598,10 +1665,36 @@ def generate_html_report() -> None:
     <script>
       mermaid.initialize({{
         startOnLoad: true,
-        theme: 'neutral',
+        theme: 'base',
+        flowchart: {{
+          curve: 'basis',
+          padding: 16,
+          nodeSpacing: 40,
+          rankSpacing: 50,
+          htmlLabels: true,
+          useMaxWidth: true,
+        }},
         themeVariables: {{
           fontFamily: 'Inter, system-ui, sans-serif',
-          fontSize: '14px',
+          fontSize: '13px',
+          primaryColor: '#ede9fe',
+          primaryTextColor: '#312e81',
+          primaryBorderColor: '#8b5cf6',
+          secondaryColor: '#fce7f3',
+          secondaryTextColor: '#831843',
+          secondaryBorderColor: '#ec4899',
+          tertiaryColor: '#d1fae5',
+          tertiaryTextColor: '#064e3b',
+          tertiaryBorderColor: '#34d399',
+          lineColor: '#8b5cf6',
+          textColor: '#374151',
+          nodeTextColor: '#1e1b4b',
+          mainBkg: '#ede9fe',
+          nodeBorder: '#8b5cf6',
+          clusterBkg: 'rgba(245,243,255,0.7)',
+          clusterBorder: '#a78bfa',
+          edgeLabelBackground: 'rgba(255,255,255,0.95)',
+          arrowheadColor: '#8b5cf6',
         }}
       }});
     </script>
