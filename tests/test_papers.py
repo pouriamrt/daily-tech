@@ -1,6 +1,8 @@
 """Tests for the AI research papers pipeline."""
 
+import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -9,13 +11,18 @@ import json as json_mod
 from unittest.mock import MagicMock, patch
 
 from dtech import (
+    DB_PATH,
+    KnowledgeEntry,
     PaperCandidate,
+    _init_db,
     _parse_ranked_ids,
     _source_category,
     deduplicate_papers,
     fetch_arxiv_papers,
     fetch_hf_daily_papers,
+    generate_relationship_map,
     nice_source_label,
+    store,
     summarize,
     summarize_paper,
 )
@@ -255,3 +262,93 @@ def test_summarize_prompt_includes_mermaid_instruction():
         prompt_sent = mock_model.invoke.call_args[0][0]
         assert "mermaid" in prompt_sent.lower()
         assert '<pre class="mermaid">' in prompt_sent
+
+
+# ---------------------------------------------------------------------------
+# generate_relationship_map tests
+# ---------------------------------------------------------------------------
+
+
+def _setup_test_db(tmp_path, monkeypatch):
+    """Create a temp DB and patch DB_PATH to use it."""
+    test_db = tmp_path / "test_knowledge.db"
+    monkeypatch.setattr("dtech.DB_PATH", test_db)
+    _init_db()
+    return test_db
+
+
+def test_generate_relationship_map_stores_entry(tmp_path, monkeypatch):
+    """When items exist and LLM finds connections, a meta entry is stored."""
+    test_db = _setup_test_db(tmp_path, monkeypatch)
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    store(KnowledgeEntry(
+        timestamp=datetime.now().isoformat(),
+        source="arxiv:2403.00001",
+        summary="<h3>Paper About Agents</h3>",
+    ))
+    store(KnowledgeEntry(
+        timestamp=datetime.now().isoformat(),
+        source="https://api.github.com/repos/langchain-ai/langchain/releases",
+        summary="<h2>LangChain 1.3</h2>",
+    ))
+
+    mermaid_code = "graph TD\n  P1[Paper About Agents] -.->|uses| R1[LangChain 1.3]"
+    mock_response = MagicMock()
+    mock_response.content = mermaid_code
+
+    with patch("dtech.model") as mock_model:
+        mock_model.invoke.return_value = mock_response
+        generate_relationship_map()
+
+    with sqlite3.connect(test_db) as conn:
+        row = conn.execute(
+            "SELECT summary FROM knowledge WHERE source = 'meta:relationship-map' AND date = ?",
+            (today,),
+        ).fetchone()
+    assert row is not None
+    assert "graph TD" in row[0]
+
+
+def test_generate_relationship_map_skips_when_none(tmp_path, monkeypatch):
+    """When LLM returns NONE, no meta entry is stored."""
+    test_db = _setup_test_db(tmp_path, monkeypatch)
+
+    store(KnowledgeEntry(
+        timestamp=datetime.now().isoformat(),
+        source="arxiv:2403.00001",
+        summary="<h3>Paper About Agents</h3>",
+    ))
+    store(KnowledgeEntry(
+        timestamp=datetime.now().isoformat(),
+        source="https://api.github.com/repos/test/repo/releases",
+        summary="<h2>Some Release</h2>",
+    ))
+
+    mock_response = MagicMock()
+    mock_response.content = "NONE"
+
+    with patch("dtech.model") as mock_model:
+        mock_model.invoke.return_value = mock_response
+        generate_relationship_map()
+
+    with sqlite3.connect(test_db) as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM knowledge WHERE source = 'meta:relationship-map'"
+        ).fetchone()
+    assert row[0] == 0
+
+
+def test_generate_relationship_map_skips_if_already_exists(tmp_path, monkeypatch):
+    """Should not call LLM if relationship map already exists for today."""
+    _setup_test_db(tmp_path, monkeypatch)
+
+    store(KnowledgeEntry(
+        timestamp=datetime.now().isoformat(),
+        source="meta:relationship-map",
+        summary="graph TD\n  A --> B",
+    ))
+
+    with patch("dtech.model") as mock_model:
+        generate_relationship_map()
+        mock_model.invoke.assert_not_called()

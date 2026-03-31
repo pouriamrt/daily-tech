@@ -528,6 +528,86 @@ def store(entry: KnowledgeEntry) -> None:
         )
 
 
+def _extract_title_from_summary(summary: str) -> str:
+    """Pull the first heading text from an HTML summary for use in relationship mapping."""
+    for tag in ("h2", "h3"):
+        start = summary.find(f"<{tag}>")
+        end = summary.find(f"</{tag}>")
+        if start != -1 and end != -1:
+            return summary[start + len(tag) + 2 : end].strip()
+    return summary[:80]
+
+
+def generate_relationship_map() -> None:
+    """Generate a Mermaid relationship diagram connecting today's briefing items."""
+    _init_db()
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    with sqlite3.connect(DB_PATH) as conn:
+        existing = conn.execute(
+            "SELECT COUNT(*) FROM knowledge WHERE source = 'meta:relationship-map' AND date = ?",
+            (today,),
+        ).fetchone()
+        if existing[0] > 0:
+            log.info("Relationship map already generated today -- skipping.")
+            return
+
+        rows = conn.execute(
+            "SELECT source, summary FROM knowledge "
+            "WHERE date = ? AND source != 'meta:relationship-map' ORDER BY timestamp",
+            (today,),
+        ).fetchall()
+
+    if len(rows) < 2:
+        log.info("Fewer than 2 items today -- skipping relationship map.")
+        return
+
+    item_list = "\n".join(
+        f"[{i + 1}] {_extract_title_from_summary(row[1])} (category: {_source_category(row[0])})"
+        for i, row in enumerate(rows)
+    )
+
+    prompt = f"""You are analyzing today's tech briefing items to find meaningful connections.
+
+ITEMS:
+{item_list}
+
+Identify connections between items: shared topics, framework dependencies,
+paper-to-tool relevance, competing approaches, etc.
+
+If meaningful connections exist, return a Mermaid graph using this structure:
+- Use graph TD
+- Group items by category using subgraph blocks
+- Use dotted arrows -.->|relationship label| for cross-category connections
+- Only include items that have at least one connection
+- Keep labels short (under 5 words)
+
+If no meaningful connections exist today, return exactly: NONE
+
+Return ONLY the Mermaid code or NONE, no markdown fences, no explanation."""
+
+    response = model.invoke(prompt)
+    content = response.content.strip()
+
+    if content.upper() == "NONE":
+        log.info("LLM found no meaningful connections today.")
+        return
+
+    # Strip markdown fences if the LLM wraps them anyway
+    if content.startswith("```"):
+        lines = content.split("\n")
+        content = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+
+    store(
+        KnowledgeEntry(
+            timestamp=datetime.now().isoformat(),
+            source="meta:relationship-map",
+            summary=content,
+        )
+    )
+    log.info("Relationship map generated and stored.")
+
+
 def nice_source_label(url: str) -> str:
     """Turn a GitHub API URL into a readable label, e.g. 'anthropics/claude-code · releases'."""
     if url.startswith("arxiv:"):
