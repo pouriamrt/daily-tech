@@ -1660,21 +1660,12 @@ def generate_html_report() -> None:
             opacity: 0.7;
         }}
         .summary ul li strong {{
-            color: var(--text-body);
-            font-weight: 550;
+            font-weight: inherit;
+            color: inherit;
         }}
         .summary ul li > strong:first-child {{
             color: var(--text-primary);
-            font-weight: 600;
-        }}
-        /* Nested list labels are visually lighter */
-        .summary ul ul li > strong:first-child {{
-            color: var(--text-secondary);
-            font-weight: 500;
-        }}
-        .summary ul ul li strong {{
-            color: var(--text-secondary);
-            font-weight: 400;
+            font-weight: 550;
         }}
         .summary a {{
             color: #4338ca;
