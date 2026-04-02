@@ -96,6 +96,27 @@ SUMMARY_HINTS: dict[str, str] = {
         "showing a practical, learnable usage of a NEW feature from the latest "
         "release (e.g. SSE, streaming, strict content-type). Keep it under 15 lines."
     ),
+    "topic:machine-learning": (
+        "Focus on repos that introduce novel techniques, not wrappers or tutorials. "
+        "For each notable repo, mention: what problem it solves, the core technique, "
+        "and star count. After the repos list, add a <h3>Quick Example</h3> section "
+        "with a Python code snippet (inside <pre><code>) showing the most interesting "
+        "repo's key API or pattern. Keep the example under 15 lines."
+    ),
+    "topic:llm": (
+        "Focus on repos with novel architectures, inference optimizations, or agent "
+        "frameworks. For each notable repo, mention the core technical contribution. "
+        "After the repos list, add a <h3>Quick Example</h3> section with a Python "
+        "code snippet (inside <pre><code>) demonstrating the most interesting repo's "
+        "API (e.g. agent setup, model loading, tool registration). Under 15 lines."
+    ),
+    "huggingface/transformers": (
+        "Focus on new model architectures supported, pipeline changes, and performance "
+        "improvements. Include model names and parameter counts. After the releases "
+        "section, add a <h3>Quick Example</h3> section with a Python code snippet "
+        "(inside <pre><code>) showing how to use a newly supported model or feature. "
+        "Keep it under 15 lines."
+    ),
 }
 
 
@@ -160,10 +181,24 @@ def _hint_for(url: str) -> str:
 
 ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 
-ARXIV_QUERY = (
+# Multiple targeted queries: broad categories + keyword-focused searches
+ARXIV_QUERIES: tuple[str, ...] = (
+    # Broad AI/ML/NLP categories
     "https://export.arxiv.org/api/query"
     "?search_query=cat:cs.AI+OR+cat:cs.LG+OR+cat:cs.CL"
-    "&sortBy=submittedDate&sortOrder=descending&max_results=20"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=25",
+    # LLM agents, tool-use, and agentic architectures
+    "https://export.arxiv.org/api/query"
+    "?search_query=all:agent+AND+(all:LLM+OR+all:language+model+OR+all:tool+use)"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=15",
+    # RAG, retrieval-augmented generation, knowledge grounding
+    "https://export.arxiv.org/api/query"
+    "?search_query=all:retrieval+augmented+generation+OR+all:RAG+OR+all:knowledge+grounding"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=10",
+    # Fine-tuning, RLHF, alignment, preference optimization
+    "https://export.arxiv.org/api/query"
+    "?search_query=all:fine-tuning+AND+(all:LLM+OR+all:RLHF+OR+all:DPO+OR+all:preference)"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=10",
 )
 
 
@@ -189,53 +224,59 @@ def _parse_arxiv_id(raw_id: str) -> str:
 
 
 def fetch_arxiv_papers(days: int = 3) -> list[PaperCandidate]:
-    """Fetch recent AI papers from arXiv and return parsed candidates."""
+    """Fetch recent AI papers from arXiv across multiple targeted queries."""
+    seen_ids: set[str] = set()
     papers: list[PaperCandidate] = []
-    with _build_paper_client() as client:
-        try:
-            resp = client.get(ARXIV_QUERY)
-            resp.raise_for_status()
-        except httpx.HTTPError as exc:
-            log.warning("Failed to fetch arXiv: %s", exc)
-            return papers
-
-    root = ET.fromstring(resp.text)
     cutoff = datetime.now() - timedelta(days=days)
 
-    for entry in root.findall("atom:entry", ARXIV_NS):
-        published_text = entry.findtext("atom:published", "", ARXIV_NS)
-        if not published_text:
-            continue
-        published_dt = datetime.fromisoformat(published_text.replace("Z", "+00:00"))
-        if published_dt.replace(tzinfo=None) < cutoff:
-            continue
+    with _build_paper_client() as client:
+        for query_url in ARXIV_QUERIES:
+            try:
+                resp = client.get(query_url)
+                resp.raise_for_status()
+            except httpx.HTTPError as exc:
+                log.warning("Failed to fetch arXiv query: %s", exc)
+                continue
 
-        raw_id = entry.findtext("atom:id", "", ARXIV_NS)
-        arxiv_id = _parse_arxiv_id(raw_id)
+            root = ET.fromstring(resp.text)
 
-        title = " ".join(entry.findtext("atom:title", "", ARXIV_NS).split())
-        abstract = " ".join(entry.findtext("atom:summary", "", ARXIV_NS).split())
+            for entry in root.findall("atom:entry", ARXIV_NS):
+                published_text = entry.findtext("atom:published", "", ARXIV_NS)
+                if not published_text:
+                    continue
+                published_dt = datetime.fromisoformat(published_text.replace("Z", "+00:00"))
+                if published_dt.replace(tzinfo=None) < cutoff:
+                    continue
 
-        pdf_url = ""
-        for link in entry.findall("atom:link", ARXIV_NS):
-            if link.get("title") == "pdf":
-                pdf_url = link.get("href", "")
-                break
+                raw_id = entry.findtext("atom:id", "", ARXIV_NS)
+                arxiv_id = _parse_arxiv_id(raw_id)
+                if arxiv_id in seen_ids:
+                    continue
+                seen_ids.add(arxiv_id)
 
-        cats = [c.get("term", "") for c in entry.findall("atom:category", ARXIV_NS)]
+                title = " ".join(entry.findtext("atom:title", "", ARXIV_NS).split())
+                abstract = " ".join(entry.findtext("atom:summary", "", ARXIV_NS).split())
 
-        papers.append(
-            PaperCandidate(
-                arxiv_id=arxiv_id,
-                title=title,
-                abstract=abstract,
-                published=published_text,
-                pdf_url=pdf_url,
-                categories=", ".join(cats),
-            )
-        )
+                pdf_url = ""
+                for link in entry.findall("atom:link", ARXIV_NS):
+                    if link.get("title") == "pdf":
+                        pdf_url = link.get("href", "")
+                        break
 
-    log.info("Fetched %d papers from arXiv", len(papers))
+                cats = [c.get("term", "") for c in entry.findall("atom:category", ARXIV_NS)]
+
+                papers.append(
+                    PaperCandidate(
+                        arxiv_id=arxiv_id,
+                        title=title,
+                        abstract=abstract,
+                        published=published_text,
+                        pdf_url=pdf_url,
+                        categories=", ".join(cats),
+                    )
+                )
+
+    log.info("Fetched %d unique papers from arXiv (%d queries)", len(papers), len(ARXIV_QUERIES))
     return papers
 
 
@@ -311,9 +352,15 @@ def deduplicate_papers(
 
 
 INTEREST_PROFILE = (
-    "Python developer working with LLMs, agents (Google ADK, LangChain), "
-    "ML pipelines, and applied AI. Interested in practical methodologies, "
-    "training techniques, agent architectures, RAG, and optimization."
+    "AI/ML engineer building production systems in Python. Core stack: "
+    "Google ADK (multi-agent orchestration), LangChain (chains, retrieval), "
+    "FastAPI (serving), HuggingFace Transformers (fine-tuning, inference). "
+    "Actively working on: LLM agent architectures, tool-use and function calling, "
+    "RAG pipelines with hybrid search, fine-tuning (LoRA/QLoRA, DPO, GRPO), "
+    "multi-agent coordination patterns, prompt engineering, and evaluation/benchmarking. "
+    "Cares about: novel training techniques, inference optimization (quantization, "
+    "speculative decoding, KV-cache), agentic tool-use, retrieval strategies, "
+    "code generation, and anything with reproducible results or open-source code."
 )
 
 
@@ -347,8 +394,17 @@ def rank_papers(candidates: list[PaperCandidate], top_n: int = 5) -> list[PaperC
 DEVELOPER PROFILE: {INTEREST_PROFILE}
 
 Below are {len(candidates)} recent papers. Select the top {top_n} most relevant to this
-developer's work. Prefer papers with novel, practical methodologies. Papers marked
-HF-TRENDING have community validation — give them a small relevance boost.
+developer's daily work. Ranking criteria (in order of importance):
+
+1. DIRECT APPLICABILITY — can the developer use this technique/tool/method in their stack?
+   (agents, RAG, fine-tuning, serving, evaluation — highest priority)
+2. NOVEL METHODOLOGY — introduces a new approach, architecture, or training technique
+   that advances the state of the art (not incremental benchmarks on existing methods)
+3. OPEN-SOURCE / REPRODUCIBLE — paper has code available or describes reproducible steps
+4. HF-TRENDING — papers marked HF-TRENDING have community validation, give a relevance boost
+
+De-prioritize: pure theoretical papers with no practical path, benchmark-only papers,
+survey papers, and papers about domains unrelated to NLP/agents/ML-engineering.
 
 Return ONLY a JSON array (no markdown, no explanation):
 [{{"arxiv_id": "...", "reason": "one-line justification"}}, ...]
@@ -376,29 +432,44 @@ PAPERS:
 
 
 def summarize_paper(paper: PaperCandidate) -> str:
-    """LLM Pass 2: generate a structured HTML summary for a single paper."""
-    prompt = f"""You are writing a research paper briefing for a Python/AI developer.
+    """LLM Pass 2: generate a structured, technical HTML summary for a single paper."""
+    prompt = f"""You are writing a TECHNICAL research paper briefing for an AI/ML engineer
+who builds production systems with LLMs, agents, RAG, and fine-tuning in Python.
 
 PAPER TITLE: {paper.title}
 ABSTRACT: {paper.abstract}
 
 Generate a structured HTML fragment (no markdown, no backticks, no <html>/<body> tags).
-Do NOT include authors. Structure:
+Do NOT include authors. Be TECHNICAL and SPECIFIC -- include actual technique names,
+architecture details, and numbers. Structure:
 
 <h3>{paper.title}</h3>
-<p class="paper-tldr"><em>One-sentence TL;DR of what this paper does.</em></p>
-<h4>Key Methodology</h4>
+<p class="paper-tldr"><em>One-sentence TL;DR: what problem, what approach, what result.</em></p>
+<h4>Technical Approach</h4>
 <ul>
-  <li>2-3 bullets explaining their approach, technique, or architecture</li>
-  <li>Focus on what's novel and how it works at a high level</li>
+  <li>3-4 bullets explaining the core technique with specifics: architecture names,
+  loss functions, training strategies, model sizes, data pipeline design</li>
+  <li>Name specific components (e.g. "cross-attention over retrieved chunks" not
+  "uses retrieval")</li>
+  <li>If they propose a new method, explain how it differs from the baseline technically</li>
 </ul>
-<h4>Why It Matters For You</h4>
+<h4>Key Results</h4>
 <ul>
-  <li>1-2 bullets on practical takeaways for someone building with LLMs,
-  agents, or ML pipelines in Python</li>
+  <li>2-3 bullets with actual benchmark numbers, datasets, and comparisons</li>
+  <li>Include percentage improvements, scores, or metrics when available</li>
+  <li>Note computational cost or efficiency gains if mentioned</li>
 </ul>
-If a visual diagram would help explain this paper's methodology (architecture, training
-pipeline, data flow), include a Mermaid diagram using:
+<h4>Practical Takeaways</h4>
+<ul>
+  <li>2-3 bullets on how this applies to someone building with Google ADK, LangChain,
+  HuggingFace Transformers, or FastAPI</li>
+  <li>Be specific: "You could adapt their retrieval scoring to your RAG pipeline" not
+  "This is relevant to RAG"</li>
+  <li>If the technique is implementable, sketch how (e.g. "add a re-ranking step after
+  your vector search using their scoring formula")</li>
+</ul>
+If a visual diagram would help explain the architecture or pipeline (most papers benefit
+from this), include a Mermaid diagram using:
 <pre class="mermaid">
 graph LR
   A["Step 1"] --> B["Step 2"]
@@ -406,13 +477,12 @@ graph LR
 IMPORTANT Mermaid rules: Always quote node labels with double quotes inside brackets,
 e.g. A["Label here"]. Use only plain text in labels -- no HTML entities, no special
 characters like &, <, >, #, or parentheses. Keep labels short (3-5 words max).
-Place the diagram after the Key Methodology section. If the methodology is simple or a
-diagram would not add clarity, do NOT include one.
+Place the diagram after the Technical Approach section.
 
 <p><a href="https://arxiv.org/abs/{paper.arxiv_id}">arXiv</a> &middot;
 <a href="{paper.pdf_url}">PDF</a></p>
 
-Keep it concise and useful. Focus on methodology, not hype."""
+Be dense and technical. No hype, no filler. Write for someone who reads papers regularly."""
 
     response = model.invoke(prompt)
     return _sanitize_mermaid_in_html(response.content)
@@ -464,37 +534,47 @@ def fetch_and_process_papers() -> None:
     log.info("Stored %d paper summaries", len(ranked))
 
 
+# Cap raw API text sent to the LLM to avoid context-window overflow.
+# ~80K chars ≈ ~20K tokens for gpt-5.4-nano, well within limits.
+_MAX_SUMMARIZE_CHARS = 80_000
+
+
 def summarize(text: str, source: str) -> str:
     """Ask the model to return a compact HTML snippet summarising raw GitHub API JSON."""
+    if len(text) > _MAX_SUMMARIZE_CHARS:
+        text = text[:_MAX_SUMMARIZE_CHARS] + "\n\n[... truncated ...]"
     hint = _hint_for(source)
     prompt = f"""
-You are preparing a compact daily tech briefing for an experienced developer.
+You are preparing a TECHNICAL daily briefing for an AI/ML engineer who builds production
+systems with Python (Google ADK, LangChain, FastAPI, HuggingFace Transformers).
 
 SOURCE: {source}
 
-You are given raw GitHub API JSON. Extract only the most important, recent information.
+You are given raw GitHub API JSON. Extract the most important, recent, TECHNICAL information.
 Focus on:
-- version names
-- dates
-- major breaking changes
-- new features
-- dropped Python versions
-- security / compatibility notes
-- one or two key upgrade recommendations
+- version names and dates
+- NEW APIs, classes, or functions with their signatures/parameters
+- major breaking changes with migration paths
+- performance improvements with numbers (e.g. "2x faster inference", "30% less memory")
+- new model support, architecture changes, or backend updates
+- dropped Python versions or dependency changes
+- security fixes with CVE IDs if available
 
 Return a SHORT HTML fragment only (no markdown, no backticks, no <html> or <body> tags).
 Structure:
 
 <h2>Title…</h2>
-<p>One-sentence overview.</p>
+<p>One-sentence technical overview.</p>
 <h3>Key releases</h3>
 <ul>
-  <li><strong>Version …</strong> – short description.</li>
+  <li><strong>Version …</strong> – description with specific API/feature names.</li>
   ...
 </ul>
-<h3>Upgrade notes</h3>
+<h3>Technical Details</h3>
 <ul>
-  <li>Short bullet</li>
+  <li>New APIs or changed interfaces (mention class/function names)</li>
+  <li>Performance or architecture changes with specifics</li>
+  <li>Migration steps for breaking changes</li>
 </ul>
 <h3>Links</h3>
 <ul>
@@ -513,7 +593,7 @@ characters like &, <, >, #, or parentheses. Keep labels short (3-5 words max).
 If the content is a simple changelog or list that does not benefit from a diagram, do NOT
 include one. Only add a diagram when it genuinely clarifies the content.
 
-Keep it concise and skimmable.{hint}
+Be technical and specific. No generic descriptions.{hint}
 Here is the raw data to summarize:
 {text}
 """
