@@ -482,10 +482,14 @@ Place the diagram after the Technical Approach section.
 <p><a href="https://arxiv.org/abs/{paper.arxiv_id}">arXiv</a> &middot;
 <a href="{paper.pdf_url}">PDF</a></p>
 
+BOLDING RULE: Use <strong> ONLY for the leading label at the start of each <li> bullet
+(e.g. "<li><strong>Core method</strong>: description..."). Do NOT bold inline terms within
+the description text. Let technical terms stand on their own without emphasis markup.
+
 Be dense and technical. No hype, no filler. Write for someone who reads papers regularly."""
 
     response = model.invoke(prompt)
-    return _sanitize_mermaid_in_html(response.content)
+    return _postprocess_summary(response.content)
 
 
 def _papers_fetched_today() -> bool:
@@ -593,12 +597,16 @@ characters like &, <, >, #, or parentheses. Keep labels short (3-5 words max).
 If the content is a simple changelog or list that does not benefit from a diagram, do NOT
 include one. Only add a diagram when it genuinely clarifies the content.
 
+BOLDING RULE: Use <strong> ONLY for the leading label at the start of each <li> bullet
+(e.g. "<li><strong>v1.2.3</strong> – description..."). Do NOT bold inline terms within
+the description text. Let technical terms stand on their own without emphasis markup.
+
 Be technical and specific. No generic descriptions.{hint}
 Here is the raw data to summarize:
 {text}
 """
     response = model.invoke(prompt)
-    return _sanitize_mermaid_in_html(response.content)
+    return _postprocess_summary(response.content)
 
 
 def store(entry: KnowledgeEntry) -> None:
@@ -627,13 +635,55 @@ def _extract_title_from_summary(summary: str) -> str:
     return summary[:80]
 
 
+def _fix_bare_quoted_nodes(code: str) -> str:
+    """Fix bare quoted strings used as Mermaid nodes (e.g. ``"Label" --> "Other"``).
+
+    Valid Mermaid requires ``NodeID["Label"]``, but LLMs sometimes emit bare
+    quoted strings without IDs.  This assigns stable generated IDs so the same
+    label always maps to the same node.
+    """
+    arrow_re = re.compile(r"(-->|-.->|-\.->|==>|~~>|-->>)")
+    # Split lines by arrows and edge labels to isolate node tokens
+    split_re = re.compile(r"(-->|-.->|-\.->|==>|~~>|-->>|\|[^|]*\|)")
+
+    node_map: dict[str, str] = {}
+    counter = 0
+
+    for line in code.split("\n"):
+        if not arrow_re.search(line):
+            continue
+        # Split into tokens around arrows/edge-labels, check each for bare "..."
+        for token in split_re.split(line):
+            t = token.strip()
+            if t.startswith('"') and t.endswith('"') and len(t) > 2:
+                label = t[1:-1]
+                if label not in node_map:
+                    counter += 1
+                    node_map[label] = f"BN{counter}"
+
+    if not node_map:
+        return code
+
+    for label, node_id in node_map.items():
+        # Replace standalone "label" that is NOT inside brackets
+        code = re.sub(
+            r'(?<!\[)"' + re.escape(label) + r'"(?!\])',
+            f'{node_id}["{label}"]',
+            code,
+        )
+    return code
+
+
 def _sanitize_mermaid(code: str) -> str:
     """Clean up LLM-generated Mermaid syntax to avoid common parse errors.
 
-    Fixes: unquoted labels containing special chars, HTML entities, unicode symbols.
+    Fixes: bare quoted nodes, unquoted labels, HTML entities, unicode symbols.
     """
     # Replace HTML entities
     code = code.replace("&amp;", "and").replace("&lt;", "").replace("&gt;", "")
+
+    # Fix bare quoted strings used as nodes (before bracket quoting)
+    code = _fix_bare_quoted_nodes(code)
 
     # Quote unquoted node labels: A[some label] -> A["some label"]
     # Matches [...] that isn't already ["..."]
@@ -666,6 +716,46 @@ def _sanitize_mermaid_in_html(html: str) -> str:
         html,
         flags=re.DOTALL,
     )
+
+
+def _normalize_html_tags(html: str) -> str:
+    """Normalize ``<b>`` -> ``<strong>`` and ``<i>`` -> ``<em>`` for consistent CSS styling."""
+    html = re.sub(r"<b\b([^>]*)>", r"<strong\1>", html)
+    html = html.replace("</b>", "</strong>")
+    html = re.sub(r"<i\b([^>]*)>", r"<em\1>", html)
+    html = html.replace("</i>", "</em>")
+    return html
+
+
+def _reduce_excessive_bold(html: str) -> str:
+    """Keep the first ``<strong>`` per line and strip subsequent ones.
+
+    LLMs tend to bold every technical term, making everything look equally heavy.
+    Processing line-by-line avoids corrupting nested HTML structures while
+    still catching multi-line ``<li>`` elements with inline bolds.
+    """
+
+    def _fix_line(line: str) -> str:
+        if line.count("<strong>") <= 1:
+            return line
+        first_end = line.find("</strong>")
+        if first_end == -1:
+            return line
+        split_at = first_end + len("</strong>")
+        before = line[:split_at]
+        after = line[split_at:]
+        after = re.sub(r"<strong>(.*?)</strong>", r"\1", after)
+        return before + after
+
+    return "\n".join(_fix_line(line) for line in html.split("\n"))
+
+
+def _postprocess_summary(html: str) -> str:
+    """Apply all HTML post-processing: mermaid sanitization, tag normalization, bold reduction."""
+    html = _sanitize_mermaid_in_html(html)
+    html = _normalize_html_tags(html)
+    html = _reduce_excessive_bold(html)
+    return html
 
 
 def generate_relationship_map() -> None:
@@ -912,10 +1002,13 @@ def generate_html_report() -> None:
             "SELECT summary FROM knowledge WHERE source = 'meta:novel-idea' AND date = ?",
             (today,),
         ).fetchone()
-    paper_items = [dict(r) for r in paper_rows]
-    items = [dict(r) for r in github_rows]
-    relationship_map = relationship_row[0] if relationship_row else ""
-    novel_idea = novel_idea_row[0] if novel_idea_row else ""
+    # Post-process summaries at render time (fixes old data stored before sanitization updates)
+    paper_items = [
+        {**dict(r), "summary": _postprocess_summary(dict(r)["summary"])} for r in paper_rows
+    ]
+    items = [{**dict(r), "summary": _postprocess_summary(dict(r)["summary"])} for r in github_rows]
+    relationship_map = _sanitize_mermaid(relationship_row[0]) if relationship_row else ""
+    novel_idea = _postprocess_summary(novel_idea_row[0]) if novel_idea_row else ""
 
     today_str = datetime.now().strftime("%A, %B %d, %Y")
 
@@ -1567,6 +1660,10 @@ def generate_html_report() -> None:
             opacity: 0.7;
         }}
         .summary ul li strong {{
+            color: var(--text-body);
+            font-weight: 550;
+        }}
+        .summary ul li > strong:first-child {{
             color: var(--text-primary);
             font-weight: 600;
         }}

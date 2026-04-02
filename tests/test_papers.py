@@ -13,8 +13,13 @@ from unittest.mock import MagicMock, patch
 from dtech import (
     KnowledgeEntry,
     PaperCandidate,
+    _fix_bare_quoted_nodes,
     _init_db,
+    _normalize_html_tags,
     _parse_ranked_ids,
+    _postprocess_summary,
+    _reduce_excessive_bold,
+    _sanitize_mermaid,
     _source_category,
     deduplicate_papers,
     fetch_arxiv_papers,
@@ -44,7 +49,9 @@ def test_nice_source_label_github_unchanged():
     assert "fastapi/fastapi" in nice_source_label(url)
 
 
-SAMPLE_ARXIV_XML = """<?xml version="1.0" encoding="UTF-8"?>
+_RECENT_DATE = datetime.now().strftime("%Y-%m-%dT00:00:00Z")
+
+SAMPLE_ARXIV_XML = f"""<?xml version="1.0" encoding="UTF-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom"
       xmlns:arxiv="http://arxiv.org/schemas/atom">
   <entry>
@@ -53,7 +60,7 @@ SAMPLE_ARXIV_XML = """<?xml version="1.0" encoding="UTF-8"?>
     to Something  </title>
     <summary>  This paper presents a novel approach
     to doing something interesting in ML.  </summary>
-    <published>2026-03-27T00:00:00Z</published>
+    <published>{_RECENT_DATE}</published>
     <link href="http://arxiv.org/abs/2403.12345v1" rel="alternate" type="text/html"/>
     <link href="http://arxiv.org/pdf/2403.12345v1"
           title="pdf" rel="related" type="application/pdf"/>
@@ -361,3 +368,165 @@ def test_generate_relationship_map_skips_if_already_exists(tmp_path, monkeypatch
     with patch("dtech.model") as mock_model:
         generate_relationship_map()
         mock_model.invoke.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# _fix_bare_quoted_nodes tests
+# ---------------------------------------------------------------------------
+
+
+def test_fix_bare_quoted_nodes_basic():
+    """Bare quoted strings on arrow lines should get node IDs."""
+    code = 'graph LR\n  "Embeddings" --> "Index"\n  "Query" --> "Index"'
+    result = _fix_bare_quoted_nodes(code)
+    assert "BN" in result
+    assert '["Embeddings"]' in result
+    assert '["Index"]' in result
+    assert '["Query"]' in result
+
+
+def test_fix_bare_quoted_nodes_same_label_reuses_id():
+    """The same label appearing twice should get the same node ID."""
+    code = 'graph LR\n  "A" --> "B"\n  "B" --> "C"'
+    result = _fix_bare_quoted_nodes(code)
+    # "B" appears twice and should map to the same ID
+    assert result.count('["B"]') == 2
+
+
+def test_fix_bare_quoted_nodes_ignores_bracketed():
+    """Already-bracketed nodes like A["Label"] should not be modified."""
+    code = 'graph LR\n  A["Label"] --> B["Other"]'
+    result = _fix_bare_quoted_nodes(code)
+    assert result == code
+
+
+def test_fix_bare_quoted_nodes_ignores_non_arrow_lines():
+    """Quoted strings on non-arrow lines (subgraph, etc.) should not be touched."""
+    code = 'graph TD\n  subgraph "My Group"\n    A --> B\n  end'
+    result = _fix_bare_quoted_nodes(code)
+    assert result == code
+
+
+# ---------------------------------------------------------------------------
+# _sanitize_mermaid integration tests
+# ---------------------------------------------------------------------------
+
+
+def test_sanitize_mermaid_fixes_bare_nodes_and_quotes():
+    """Full sanitizer should fix bare quoted nodes and quote unquoted labels."""
+    code = 'graph LR\n  "Input" --> "Output"\n  A[Unquoted] --> B'
+    result = _sanitize_mermaid(code)
+    assert '["Input"]' in result
+    assert '["Output"]' in result
+    assert '["Unquoted"]' in result
+
+
+# ---------------------------------------------------------------------------
+# _normalize_html_tags tests
+# ---------------------------------------------------------------------------
+
+
+def test_normalize_html_tags_b_to_strong():
+    html = "<b>bold</b> and <i>italic</i>"
+    result = _normalize_html_tags(html)
+    assert "<strong>bold</strong>" in result
+    assert "<em>italic</em>" in result
+    assert "<b>" not in result
+    assert "<i>" not in result
+
+
+def test_normalize_html_tags_preserves_strong():
+    html = "<strong>already</strong> and <em>fine</em>"
+    result = _normalize_html_tags(html)
+    assert result == html
+
+
+# ---------------------------------------------------------------------------
+# _reduce_excessive_bold tests
+# ---------------------------------------------------------------------------
+
+
+def test_reduce_excessive_bold_keeps_first_strips_rest():
+    html = (
+        "<li><strong>Label</strong>: text with <strong>term1</strong> "
+        "and <strong>term2</strong></li>"
+    )
+    result = _reduce_excessive_bold(html)
+    assert "<strong>Label</strong>" in result
+    assert "<strong>term1</strong>" not in result
+    assert "term1" in result
+    assert "<strong>term2</strong>" not in result
+    assert "term2" in result
+
+
+def test_reduce_excessive_bold_no_strong():
+    html = "<li>Plain text bullet</li>"
+    result = _reduce_excessive_bold(html)
+    assert result == html
+
+
+def test_reduce_excessive_bold_single_strong_unchanged():
+    html = "<li><strong>Only label</strong>: description</li>"
+    result = _reduce_excessive_bold(html)
+    assert result == html
+
+
+def test_reduce_excessive_bold_works_on_paragraphs():
+    html = "<p>Text with <strong>bold1</strong> and <strong>bold2</strong></p>"
+    result = _reduce_excessive_bold(html)
+    assert "<strong>bold1</strong>" in result
+    assert "<strong>bold2</strong>" not in result
+    assert "bold2" in result
+
+
+def test_reduce_excessive_bold_skips_nested_lists():
+    """Multi-line <li> with nested <ul> should not be corrupted."""
+    html = (
+        "<li><strong>Label</strong>\n"
+        "  <ul>\n"
+        "    <li><strong>Inner</strong>: text</li>\n"
+        "  </ul>\n"
+        "</li>"
+    )
+    result = _reduce_excessive_bold(html)
+    # Inner single-line <li> should have its bold kept (first strong)
+    assert "<li><strong>Inner</strong>: text</li>" in result
+    # Outer line only has one strong, so stays intact
+    assert "<li><strong>Label</strong>" in result
+
+
+def test_reduce_excessive_bold_multiline_li_with_inline_bolds():
+    """A <li> line that has nested content AND inline bolds should be fixed."""
+    html = (
+        "<li><strong>Label</strong> intro in <strong>v1.2</strong>, plus:\n"
+        "  <ul>\n"
+        "    <li>Sub-item</li>\n"
+        "  </ul>\n"
+        "</li>"
+    )
+    result = _reduce_excessive_bold(html)
+    # First line had 2 strongs - second should be stripped
+    assert "<strong>Label</strong>" in result
+    assert "<strong>v1.2</strong>" not in result
+    assert "v1.2" in result
+
+
+# ---------------------------------------------------------------------------
+# _postprocess_summary integration test
+# ---------------------------------------------------------------------------
+
+
+def test_postprocess_summary_full_pipeline():
+    """postprocess_summary should normalize tags, fix mermaid, and reduce bold."""
+    html = (
+        "<li><b>Label</b>: <b>inline bold</b></li>"
+        '<pre class="mermaid">graph LR\n  "A" --> "B"</pre>'
+    )
+    result = _postprocess_summary(html)
+    # b -> strong, first bold kept, second stripped
+    assert "<strong>Label</strong>" in result
+    assert "<strong>inline bold</strong>" not in result
+    assert "inline bold" in result
+    # Mermaid bare nodes fixed
+    assert '["A"]' in result
+    assert '["B"]' in result
