@@ -181,23 +181,48 @@ def _hint_for(url: str) -> str:
 
 ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 
-# Multiple targeted queries: broad categories + keyword-focused searches
+# Technique-focused queries: each targets a specific methodological area where
+# new algorithms, architectures, or training methods show up. The old broad
+# cs.AI/cs.LG/cs.CL query was removed because it pulled mostly benchmark/survey
+# noise. Every query below is scoped to a concrete technical topic.
 ARXIV_QUERIES: tuple[str, ...] = (
-    # Broad AI/ML/NLP categories
+    # LLM agents: planning, reflection, tool-use, multi-agent coordination
     "https://export.arxiv.org/api/query"
-    "?search_query=cat:cs.AI+OR+cat:cs.LG+OR+cat:cs.CL"
-    "&sortBy=submittedDate&sortOrder=descending&max_results=25",
-    # LLM agents, tool-use, and agentic architectures
+    "?search_query=all:agent+AND+(all:LLM+OR+all:language+model+OR+all:tool+use"
+    "+OR+all:planning+OR+all:reflection+OR+all:multi-agent)"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=20",
+    # Retrieval: RAG, dense/hybrid search, re-ranking, embeddings, indexing
     "https://export.arxiv.org/api/query"
-    "?search_query=all:agent+AND+(all:LLM+OR+all:language+model+OR+all:tool+use)"
+    "?search_query=all:(retrieval+augmented+OR+RAG+OR+re-ranking+OR+dense+retrieval"
+    "+OR+hybrid+search+OR+embedding+model)+AND+all:language+model"
     "&sortBy=submittedDate&sortOrder=descending&max_results=15",
-    # RAG, retrieval-augmented generation, knowledge grounding
+    # Preference optimization & RL fine-tuning: RLHF, DPO, GRPO, PPO, reward models
     "https://export.arxiv.org/api/query"
-    "?search_query=all:retrieval+augmented+generation+OR+all:RAG+OR+all:knowledge+grounding"
+    "?search_query=all:(RLHF+OR+DPO+OR+GRPO+OR+PPO+OR+preference+optimization"
+    "+OR+reward+model+OR+alignment)+AND+all:language+model"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=15",
+    # Parameter-efficient fine-tuning: LoRA, QLoRA, adapters, PEFT
+    "https://export.arxiv.org/api/query"
+    "?search_query=all:(LoRA+OR+QLoRA+OR+adapter+OR+PEFT+OR+parameter+efficient)"
+    "+AND+all:fine-tuning"
     "&sortBy=submittedDate&sortOrder=descending&max_results=10",
-    # Fine-tuning, RLHF, alignment, preference optimization
+    # Inference optimization: quantization, speculative decoding, KV-cache, attention kernels
     "https://export.arxiv.org/api/query"
-    "?search_query=all:fine-tuning+AND+(all:LLM+OR+all:RLHF+OR+all:DPO+OR+all:preference)"
+    "?search_query=all:(quantization+OR+speculative+decoding+OR+KV+cache"
+    "+OR+FlashAttention+OR+paged+attention+OR+inference+optimization)"
+    "+AND+all:LLM"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=15",
+    # Architecture innovations: MoE, state-space, linear attention, long-context
+    "https://export.arxiv.org/api/query"
+    "?search_query=all:(mixture+of+experts+OR+MoE+OR+state+space+model"
+    "+OR+linear+attention+OR+long+context+OR+sparse+attention)"
+    "+AND+all:language+model"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=15",
+    # Reasoning & verification: CoT, self-correction, process supervision, tree search
+    "https://export.arxiv.org/api/query"
+    "?search_query=all:(chain+of+thought+OR+reasoning+OR+self-correction"
+    "+OR+process+supervision+OR+tree+search+OR+verification)"
+    "+AND+all:language+model"
     "&sortBy=submittedDate&sortOrder=descending&max_results=10",
 )
 
@@ -352,16 +377,113 @@ def deduplicate_papers(
 
 
 INTEREST_PROFILE = (
-    "AI/ML engineer building production systems in Python. Core stack: "
-    "Google ADK (multi-agent orchestration), LangChain (chains, retrieval), "
-    "FastAPI (serving), HuggingFace Transformers (fine-tuning, inference). "
-    "Actively working on: LLM agent architectures, tool-use and function calling, "
-    "RAG pipelines with hybrid search, fine-tuning (LoRA/QLoRA, DPO, GRPO), "
-    "multi-agent coordination patterns, prompt engineering, and evaluation/benchmarking. "
-    "Cares about: novel training techniques, inference optimization (quantization, "
-    "speculative decoding, KV-cache), agentic tool-use, retrieval strategies, "
-    "code generation, and anything with reproducible results or open-source code."
+    "Senior AI/ML engineer who ships production LLM systems in Python and does "
+    "applied research on the side. Core stack: Google ADK (multi-agent "
+    "orchestration), LangChain (chains, retrieval, agents), FastAPI (serving), "
+    "HuggingFace Transformers (fine-tuning, inference). Actively building: LLM "
+    "agent architectures, tool-use and function calling, RAG pipelines with "
+    "hybrid search and re-ranking, fine-tuning (LoRA/QLoRA, DPO, GRPO), "
+    "multi-agent coordination, inference optimization. "
+    "WANTS papers that deliver a NEW METHOD, ALGORITHM, ARCHITECTURE, or "
+    "TRAINING TECHNIQUE — something implementable that changes how a system is "
+    "built. Specifically values: novel training objectives and optimizers, "
+    "parameter-efficient fine-tuning, attention and architectural innovations "
+    "(MoE, state-space, linear attention, long-context), inference-time "
+    "optimizations (quantization, speculative decoding, KV-cache, batching, "
+    "FlashAttention variants), agent reasoning mechanisms (planning, "
+    "reflection, self-correction, tool-use protocols), retrieval methods "
+    "(dense/hybrid, re-ranking, indexing), and anything with reproducible "
+    "results or open-source code. "
+    "DOES NOT WANT: benchmark-introduction papers, leaderboard chasing, "
+    "survey/review papers, dataset papers, position/opinion pieces, pure "
+    "theoretical proofs, or papers about domains unrelated to language models "
+    "and AI engineering (vision-only classification/detection, robotics, "
+    "medical imaging, bio/climate/genomics applications)."
 )
+
+
+# ---------------------------------------------------------------------------
+# Pre-LLM hard filter: drop obvious benchmark/survey/off-topic papers before
+# they reach the ranker. Cheap, deterministic, and catches the bulk of noise
+# without wasting tokens. HF-trending papers bypass this filter because
+# community curation outranks keyword heuristics.
+# ---------------------------------------------------------------------------
+
+_LOW_VALUE_TITLE_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(a survey|survey of|a review|systematic review|comprehensive study)\b", re.I),
+    # \w* allows prefixed forms like "BenchmarkX" or "LeaderboardEval"
+    re.compile(r"\b(benchmark\w*|benchmarking|leaderboard\w*|evaluation suite)\b", re.I),
+    re.compile(r"\b(dataset for|corpus for|new dataset)\b", re.I),
+)
+
+# Benchmark/survey papers almost always announce themselves in the first two
+# sentences of the abstract. Scoping the scan to the opening reduces false
+# positives from method papers that happen to evaluate on a benchmark.
+_LOW_VALUE_ABSTRACT_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(
+        r"\bwe (introduce|present|propose|release|construct|build) a (new |novel )?"
+        r"(benchmark|dataset|corpus|evaluation|testbed|leaderboard)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\bwe (conduct|present|provide) (a |an )?(comprehensive |extensive |systematic )?"
+        r"(survey|review|empirical study|empirical analysis|evaluation suite|testbed)\b",
+        re.I,
+    ),
+    re.compile(r"\bthis (paper|work|study) (surveys|reviews|benchmarks)\b", re.I),
+    re.compile(
+        r"\bto (fill this gap|address this),? we (introduce|release) "
+        r"(a |an )?(benchmark|dataset)\b",
+        re.I,
+    ),
+)
+
+_OFF_TOPIC_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\b(autonomous driving|self.driving|lidar|point cloud)\b", re.I),
+    re.compile(r"\b(robotic manipulation|grasping|locomotion|legged robot)\b", re.I),
+    re.compile(
+        r"\b(medical imaging|radiology|pathology|clinical trial"
+        r"|ECG|MRI|CT scan|histopathology)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(climate|weather forecast|remote sensing|seismic"
+        r"|genomic|protein folding|drug discovery)\b",
+        re.I,
+    ),
+    re.compile(
+        r"\b(face recognition|pose estimation|optical flow|video super.resolution)\b",
+        re.I,
+    ),
+    # Vision-only applications — negative lookahead lets multimodal/VLM papers through
+    re.compile(
+        r"\b(image classification|object detection|semantic segmentation|instance segmentation)\b"
+        r"(?!.*\b(language|LLM|multimodal|VLM|vision.language)\b)",
+        re.I | re.S,
+    ),
+)
+
+
+def _is_low_value_paper(paper: PaperCandidate) -> bool:
+    """Return True if paper is a benchmark/survey/dataset or off-topic paper.
+
+    HF-trending papers bypass the filter (community validation outranks regex).
+    """
+    if paper.hf_trending:
+        return False
+
+    if any(p.search(paper.title) for p in _LOW_VALUE_TITLE_PATTERNS):
+        return True
+
+    abstract_opening = paper.abstract[:600]
+    if any(p.search(abstract_opening) for p in _LOW_VALUE_ABSTRACT_PATTERNS):
+        return True
+
+    haystack = f"{paper.title}\n{paper.abstract}"
+    if any(p.search(haystack) for p in _OFF_TOPIC_PATTERNS):
+        return True
+
+    return False
 
 
 def _parse_ranked_ids(raw: str) -> list[str]:
@@ -389,25 +511,39 @@ def rank_papers(candidates: list[PaperCandidate], top_n: int = 5) -> list[PaperC
         for i, p in enumerate(candidates)
     )
 
-    prompt = f"""You are selecting the most relevant AI research papers for a developer.
+    prompt = f"""You are selecting research papers for a senior AI engineer who needs
+NEW TECHNICAL METHODS, not benchmarks or surveys.
 
 DEVELOPER PROFILE: {INTEREST_PROFILE}
 
-Below are {len(candidates)} recent papers. Select the top {top_n} most relevant to this
-developer's daily work. Ranking criteria (in order of importance):
+Below are {len(candidates)} recent papers. Select the top {top_n} that deliver the most
+substantive METHODOLOGICAL contribution this developer can use at work or in research.
 
-1. DIRECT APPLICABILITY — can the developer use this technique/tool/method in their stack?
-   (agents, RAG, fine-tuning, serving, evaluation — highest priority)
-2. NOVEL METHODOLOGY — introduces a new approach, architecture, or training technique
-   that advances the state of the art (not incremental benchmarks on existing methods)
-3. OPEN-SOURCE / REPRODUCIBLE — paper has code available or describes reproducible steps
-4. HF-TRENDING — papers marked HF-TRENDING have community validation, give a relevance boost
+SELECTION CRITERIA (ranked):
 
-De-prioritize: pure theoretical papers with no practical path, benchmark-only papers,
-survey papers, and papers about domains unrelated to NLP/agents/ML-engineering.
+1. NOVEL TECHNICAL CONTRIBUTION — paper proposes a new algorithm, architecture, loss
+   function, optimizer, training scheme, decoding strategy, attention mechanism, or
+   inference technique. This is the PRIMARY criterion. If a paper does not clearly
+   introduce a new method, reject it.
+2. IMPLEMENTABILITY — the method is described precisely enough to implement, ideally
+   with released code, pseudocode, or concrete architectural details.
+3. STACK APPLICABILITY — the technique applies to LLM agents, RAG, fine-tuning, or
+   inference systems (their working stack).
+4. HF-TRENDING — community-validated papers marked HF-TRENDING get a small boost, but
+   only after the above criteria are met.
+
+HARD REJECTS — do not select these even if interesting:
+- Benchmark introductions ("we introduce a benchmark / dataset / evaluation suite")
+- Survey, review, or position papers
+- Leaderboard chasing (same method, new dataset, marginal gains)
+- Pure empirical studies with no new method
+- Theoretical papers with no implementation path
+- Off-topic domains: vision-only, robotics, medical imaging, bio/climate, autonomous driving
+
+Prefer papers that would make the engineer think "I can build this on Monday."
 
 Return ONLY a JSON array (no markdown, no explanation):
-[{{"arxiv_id": "...", "reason": "one-line justification"}}, ...]
+[{{"arxiv_id": "...", "reason": "one-line justification naming the technical contribution"}}, ...]
 
 PAPERS:
 {paper_list}"""
@@ -521,6 +657,19 @@ def fetch_and_process_papers() -> None:
 
     candidates = deduplicate_papers(arxiv, hf)
     log.info("Deduplicated to %d unique candidates", len(candidates))
+
+    before_filter = len(candidates)
+    candidates = [p for p in candidates if not _is_low_value_paper(p)]
+    log.info(
+        "Pre-LLM filter kept %d of %d candidates (dropped %d benchmark/survey/off-topic)",
+        len(candidates),
+        before_filter,
+        before_filter - len(candidates),
+    )
+
+    if not candidates:
+        log.warning("All candidates filtered out — skipping paper processing.")
+        return
 
     ranked = rank_papers(candidates, top_n=5)
     log.info("LLM selected %d papers", len(ranked))
