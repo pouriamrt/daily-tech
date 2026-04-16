@@ -10,6 +10,7 @@ dependencies = [
     "langchain-openai>=1.1",
     "tqdm>=4.66",
     "python-dotenv>=1.0",
+    "acl-anthology>=1.1.0",
 ]
 
 [tool.ruff]
@@ -21,6 +22,12 @@ select = ["E", "F", "I", "N", "W", "UP"]
 
 [tool.ruff.format]
 quote-style = "double"
+
+[tool.pytest.ini_options]
+markers = [
+    "integration: opt-in tests that hit live external endpoints",
+]
+addopts = "-m 'not integration'"
 
 [dependency-groups]
 dev = [

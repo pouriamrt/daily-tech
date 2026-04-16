@@ -32,6 +32,16 @@ from dtech import (
 )
 
 
+def test_paper_candidate_requires_source_field():
+    """PaperCandidate must carry a source discriminator."""
+    from dataclasses import fields
+
+    field_names = {f.name for f in fields(PaperCandidate)}
+    assert "paper_id" in field_names, "paper_id field is required"
+    assert "source" in field_names, "source field is required"
+    assert "arxiv_id" not in field_names, "arxiv_id must be renamed to paper_id"
+
+
 def test_source_category_arxiv():
     assert _source_category("arxiv:2403.12345") == "paper"
 
@@ -96,7 +106,8 @@ def test_fetch_arxiv_papers_parses_xml(monkeypatch):
     papers = fetch_arxiv_papers(days=3)
     assert len(papers) == 1
     p = papers[0]
-    assert p.arxiv_id == "2403.12345"
+    assert p.paper_id == "2403.12345"
+    assert p.source == "arxiv"
     assert "Novel Approach" in p.title
     assert "novel approach" in p.abstract
     assert p.pdf_url == "http://arxiv.org/pdf/2403.12345v1"
@@ -157,7 +168,8 @@ def test_fetch_hf_daily_papers_parses_json(monkeypatch):
 
     papers = fetch_hf_daily_papers()
     assert len(papers) == 2
-    assert papers[0].arxiv_id == "2403.67890"
+    assert papers[0].paper_id == "2403.67890"
+    assert papers[0].source == "hf"
     assert papers[0].hf_trending is True
     assert "agent architectures" in papers[0].abstract
 
@@ -166,41 +178,45 @@ def test_deduplicate_papers_merges_by_arxiv_id():
     """Papers appearing in both sources should be deduped, keeping HF trending flag."""
     arxiv = [
         PaperCandidate(
-            arxiv_id="2403.12345",
+            paper_id="2403.12345",
             title="Shared Paper",
             abstract="Abstract from arXiv",
             published="2026-03-27T00:00:00Z",
             pdf_url="http://arxiv.org/pdf/2403.12345v1",
             categories="cs.LG, cs.AI",
+            source="arxiv",
             hf_trending=False,
         ),
         PaperCandidate(
-            arxiv_id="2403.99999",
+            paper_id="2403.99999",
             title="arXiv Only",
             abstract="Only on arXiv",
             published="2026-03-27T00:00:00Z",
             pdf_url="http://arxiv.org/pdf/2403.99999v1",
             categories="cs.CL",
+            source="arxiv",
             hf_trending=False,
         ),
     ]
     hf = [
         PaperCandidate(
-            arxiv_id="2403.12345",
+            paper_id="2403.12345",
             title="Shared Paper",
             abstract="Abstract from HF",
             published="2026-03-27T12:00:00.000Z",
             pdf_url="https://arxiv.org/pdf/2403.12345",
             categories="",
+            source="hf",
             hf_trending=True,
         ),
         PaperCandidate(
-            arxiv_id="2403.77777",
+            paper_id="2403.77777",
             title="HF Only",
             abstract="Only on HF",
             published="2026-03-27T08:00:00.000Z",
             pdf_url="https://arxiv.org/pdf/2403.77777",
             categories="",
+            source="hf",
             hf_trending=True,
         ),
     ]
@@ -208,17 +224,17 @@ def test_deduplicate_papers_merges_by_arxiv_id():
     result = deduplicate_papers(arxiv, hf)
     assert len(result) == 3
 
-    ids = {p.arxiv_id for p in result}
+    ids = {p.paper_id for p in result}
     assert ids == {"2403.12345", "2403.99999", "2403.77777"}
 
-    shared = next(p for p in result if p.arxiv_id == "2403.12345")
+    shared = next(p for p in result if p.paper_id == "2403.12345")
     assert shared.hf_trending is True
     assert shared.categories == "cs.LG, cs.AI"
 
 
 def test_parse_ranked_ids_valid_json():
     raw = (
-        '[{"arxiv_id": "2403.111", "reason": "good"}, {"arxiv_id": "2403.222", "reason": "great"}]'
+        '[{"paper_id": "2403.111", "reason": "good"}, {"paper_id": "2403.222", "reason": "great"}]'
     )
     assert _parse_ranked_ids(raw) == ["2403.111", "2403.222"]
 
@@ -229,19 +245,20 @@ def test_parse_ranked_ids_invalid_json():
 
 
 def test_parse_ranked_ids_strips_markdown_fences():
-    raw = '```json\n[{"arxiv_id": "2403.333", "reason": "nice"}]\n```'
+    raw = '```json\n[{"paper_id": "2403.333", "reason": "nice"}]\n```'
     assert _parse_ranked_ids(raw) == ["2403.333"]
 
 
 def test_summarize_paper_prompt_includes_mermaid_instruction():
     """The paper summarization prompt should instruct LLM to optionally include Mermaid."""
     paper = PaperCandidate(
-        arxiv_id="2403.00001",
+        paper_id="2403.00001",
         title="Test Paper",
         abstract="A test abstract about methodology.",
         published="2026-03-27T00:00:00Z",
         pdf_url="http://arxiv.org/pdf/2403.00001v1",
         categories="cs.LG",
+        source="arxiv",
     )
 
     mock_response = MagicMock()
@@ -530,3 +547,74 @@ def test_postprocess_summary_full_pipeline():
     # Mermaid bare nodes fixed
     assert '["A"]' in result
     assert '["B"]' in result
+
+
+def test_deduplicate_papers_handles_three_sources():
+    arxiv_p = PaperCandidate(
+        paper_id="2403.12345",
+        title="A",
+        abstract="a",
+        published="2026-04-10",
+        pdf_url="https://arxiv.org/pdf/2403.12345",
+        categories="cs.CL",
+        source="arxiv",
+    )
+    hf_p = PaperCandidate(
+        paper_id="2403.12345",
+        title="A",
+        abstract="a",
+        published="2026-04-10",
+        pdf_url="https://arxiv.org/pdf/2403.12345",
+        categories="",
+        source="hf",
+        hf_trending=True,
+    )
+    acl_p = PaperCandidate(
+        paper_id="2024.sdp-1.3",
+        title="S",
+        abstract="s",
+        published="2024-11-01T00:00:00Z",
+        pdf_url="https://aclanthology.org/2024.sdp-1.3.pdf",
+        categories="",
+        source="acl-sdp",
+    )
+    result = deduplicate_papers([arxiv_p], [hf_p], [acl_p])
+    ids = [p.paper_id for p in result]
+    assert set(ids) == {"2403.12345", "2024.sdp-1.3"}
+    merged_arxiv = next(p for p in result if p.paper_id == "2403.12345")
+    assert merged_arxiv.source == "arxiv"
+    assert merged_arxiv.hf_trending is True
+    merged_acl = next(p for p in result if p.paper_id == "2024.sdp-1.3")
+    assert merged_acl.source == "acl-sdp"
+
+
+def test_source_category_acl_sdp():
+    assert _source_category("acl-sdp:2024.sdp-1.3") == "paper"
+
+
+def test_source_category_hf():
+    assert _source_category("hf:2403.12345") == "paper"
+
+
+def test_nice_source_label_acl_sdp():
+    assert nice_source_label("acl-sdp:2024.sdp-1.3") == "ACL SDP · 2024.sdp-1.3"
+
+
+def test_nice_source_label_hf():
+    label = nice_source_label("hf:2403.12345")
+    assert label == "HF · 2403.12345"
+
+
+def test_papers_fetched_today_detects_hf_and_acl_prefixes(tmp_path, monkeypatch):
+    import dtech
+
+    db = tmp_path / "test.db"
+    monkeypatch.setattr(dtech, "DB_PATH", db)
+    dtech._init_db()
+    today = datetime.now().strftime("%Y-%m-%d")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO knowledge (timestamp, source, summary, date) VALUES (?, ?, ?, ?)",
+            (datetime.now().isoformat(), "hf:2403.99999", "x", today),
+        )
+    assert dtech._papers_fetched_today() is True

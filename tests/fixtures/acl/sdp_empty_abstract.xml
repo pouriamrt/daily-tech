@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/"
+         xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"
+         xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <ListRecords>
+    <record>
+      <header>
+        <identifier>oai:aclanthology.org:2024.sdp-1.4</identifier>
+        <datestamp>2024-11-15</datestamp>
+      </header>
+      <metadata>
+        <oai_dc:dc>
+          <dc:title>Another SDP Paper</dc:title>
+          <dc:description></dc:description>
+          <dc:date>2024</dc:date>
+          <dc:identifier>2024.sdp-1.4</dc:identifier>
+        </oai_dc:dc>
+      </metadata>
+    </record>
+  </ListRecords>
+</OAI-PMH>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<OAI-PMH xmlns="http://www.openarchives.org/OAI/2.0/"
+         xmlns:oai_dc="http://www.openarchives.org/OAI/2.0/oai_dc/"
+         xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <ListRecords>
+    <record>
+      <header><identifier>oai:aclanthology.org:2024.sdp-1.2</identifier></header>
+      <metadata>
+        <oai_dc:dc>
+          <dc:title>Paper P2A</dc:title>
+          <dc:description>Abstract for P2A.</dc:description>
+          <dc:date>2024-11</dc:date>
+          <dc:identifier>2024.sdp-1.2</dc:identifier>
+        </oai_dc:dc>
+      </metadata>
+    </record>
+    <resumptionToken></resumptionToken>
+  </ListRecords>
+</OAI-PMH>

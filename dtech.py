@@ -9,6 +9,7 @@ import xml.etree.ElementTree as ET  # noqa: F401  (used by upcoming paper-fetch 
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -132,19 +133,23 @@ class KnowledgeEntry:
     summary: str
 
 
+PaperSource = Literal["arxiv", "hf", "acl-sdp"]
+
+
 @dataclass(frozen=True)
 class PaperCandidate:
-    arxiv_id: str
+    paper_id: str
     title: str
     abstract: str
     published: str
     pdf_url: str
     categories: str
+    source: PaperSource
     hf_trending: bool = False
 
 
 def _init_db() -> None:
-    """Create the knowledge table if it doesn't exist."""
+    """Create the knowledge and shown_papers tables if they don't exist."""
     with sqlite3.connect(DB_PATH) as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS knowledge (
@@ -160,6 +165,50 @@ def _init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_knowledge_date
             ON knowledge(date DESC)
         """)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS shown_papers (
+                paper_id    TEXT PRIMARY KEY,
+                shown_date  TEXT NOT NULL
+            )
+        """)
+        conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_shown_papers_date
+            ON shown_papers(shown_date DESC)
+        """)
+
+
+def filter_already_shown(
+    candidates: list[PaperCandidate],
+) -> list[PaperCandidate]:
+    """Drop candidates whose paper_id has appeared in a previous daily report."""
+    if not candidates:
+        return []
+    with sqlite3.connect(DB_PATH) as conn:
+        placeholders = ",".join("?" * len(candidates))
+        rows = conn.execute(
+            f"SELECT paper_id FROM shown_papers WHERE paper_id IN ({placeholders})",
+            [p.paper_id for p in candidates],
+        ).fetchall()
+    shown = {row[0] for row in rows}
+    filtered = [p for p in candidates if p.paper_id not in shown]
+    log.info(
+        "Filtered %d already-shown papers; %d candidates remain",
+        len(candidates) - len(filtered),
+        len(filtered),
+    )
+    return filtered
+
+
+def record_shown_papers(selected: list[PaperCandidate]) -> None:
+    """Record that these papers appeared in today's report."""
+    if not selected:
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    with sqlite3.connect(DB_PATH) as conn:
+        conn.executemany(
+            "INSERT OR IGNORE INTO shown_papers (paper_id, shown_date) VALUES (?, ?)",
+            [(p.paper_id, today) for p in selected],
+        )
 
 
 def _build_client() -> SyncCacheClient:
@@ -292,12 +341,13 @@ def fetch_arxiv_papers(days: int = 3) -> list[PaperCandidate]:
 
                 papers.append(
                     PaperCandidate(
-                        arxiv_id=arxiv_id,
+                        paper_id=arxiv_id,
                         title=title,
                         abstract=abstract,
                         published=published_text,
                         pdf_url=pdf_url,
                         categories=", ".join(cats),
+                        source="arxiv",
                     )
                 )
 
@@ -331,12 +381,13 @@ def fetch_hf_daily_papers() -> list[PaperCandidate]:
 
         papers.append(
             PaperCandidate(
-                arxiv_id=arxiv_id,
+                paper_id=arxiv_id,
                 title=title,
                 abstract=abstract,
                 published=published,
                 pdf_url=f"https://arxiv.org/pdf/{arxiv_id}",
                 categories="",
+                source="hf",
                 hf_trending=True,
             )
         )
@@ -345,33 +396,135 @@ def fetch_hf_daily_papers() -> list[PaperCandidate]:
     return papers
 
 
+# ---------------------------------------------------------------------------
+# ACL Anthology — SDP workshop fetcher (via acl-anthology Python library)
+# ---------------------------------------------------------------------------
+
+_MONTH_TO_NUM: dict[str, int] = {
+    "january": 1,
+    "february": 2,
+    "march": 3,
+    "april": 4,
+    "may": 5,
+    "june": 6,
+    "july": 7,
+    "august": 8,
+    "september": 9,
+    "october": 10,
+    "november": 11,
+    "december": 12,
+}
+
+
+def _acl_paper_date(year: int | str, month: str | None) -> datetime:
+    """Convert ACL paper year + optional month name to a datetime for cutoff comparison."""
+    m = _MONTH_TO_NUM.get((month or "").lower(), 1)
+    return datetime(int(year), m, 1)
+
+
+def _acl_paper_published_iso(year: int | str, month: str | None) -> str:
+    """Convert ACL paper year + optional month name to an ISO8601 string."""
+    m = _MONTH_TO_NUM.get((month or "").lower(), 1)
+    return f"{year}-{m:02d}-01T00:00:00Z"
+
+
+def fetch_acl_sdp_papers(days: int = 90) -> list[PaperCandidate]:
+    """Fetch recent ACL SDP workshop papers via the acl-anthology Python library.
+
+    Returns papers published within the last `days`. Graceful on failure
+    (returns empty list + warning) so the main pipeline continues.
+    """
+    try:
+        from acl_anthology import Anthology
+    except ImportError:
+        log.warning("acl-anthology package not installed — skipping ACL SDP papers")
+        return []
+
+    papers: list[PaperCandidate] = []
+    cutoff = datetime.now() - timedelta(days=days)
+
+    try:
+        anthology = Anthology.from_repo()
+    except Exception as exc:
+        log.warning("Failed to load ACL Anthology repo: %s", exc)
+        return []
+
+    current_year = datetime.now().year
+    for year in range(current_year, current_year - 6, -1):
+        collection = anthology.get_collection(f"{year}.sdp")
+        if collection is None:
+            continue
+        for volume in collection.volumes():
+            for paper in volume.papers():
+                title = str(paper.title or "").strip()
+                if not title or title.startswith("Proceedings of"):
+                    continue
+
+                pub_date = _acl_paper_date(paper.year or year, getattr(paper, "month", None))
+                if pub_date < cutoff:
+                    continue
+
+                abstract = str(paper.abstract or "").strip()
+                if not abstract:
+                    log.info("ACL paper %s has no abstract", paper.full_id)
+
+                pdf_url = (
+                    paper.pdf.url if paper.pdf else f"https://aclanthology.org/{paper.full_id}.pdf"
+                )
+
+                papers.append(
+                    PaperCandidate(
+                        paper_id=paper.full_id,
+                        title=title,
+                        abstract=abstract,
+                        published=_acl_paper_published_iso(
+                            paper.year or year, getattr(paper, "month", None)
+                        ),
+                        pdf_url=pdf_url,
+                        categories="",
+                        source="acl-sdp",
+                    )
+                )
+
+    log.info("Fetched %d ACL SDP papers (last %d days)", len(papers), days)
+    return papers
+
+
 def deduplicate_papers(
     arxiv: list[PaperCandidate],
     hf: list[PaperCandidate],
+    acl_sdp: list[PaperCandidate] | None = None,
 ) -> list[PaperCandidate]:
-    """Merge papers from both sources, deduplicating by arXiv ID.
+    """Merge papers across sources, deduplicating by paper_id.
 
-    When a paper appears in both, keep arXiv's richer metadata but set hf_trending=True.
+    When a paper appears in both arXiv and HF (same arXiv ID), keep arXiv's
+    richer metadata but flip hf_trending=True. ACL papers use anthology IDs,
+    which never collide with arXiv IDs, so they pass through untouched.
     """
     by_id: dict[str, PaperCandidate] = {}
 
     for p in arxiv:
-        by_id[p.arxiv_id] = p
+        by_id[p.paper_id] = p
 
     for p in hf:
-        if p.arxiv_id in by_id:
-            existing = by_id[p.arxiv_id]
-            by_id[p.arxiv_id] = PaperCandidate(
-                arxiv_id=existing.arxiv_id,
+        if p.paper_id in by_id:
+            existing = by_id[p.paper_id]
+            by_id[p.paper_id] = PaperCandidate(
+                paper_id=existing.paper_id,
                 title=existing.title,
                 abstract=existing.abstract,
                 published=existing.published,
                 pdf_url=existing.pdf_url,
                 categories=existing.categories,
+                source=existing.source,
                 hf_trending=True,
             )
         else:
-            by_id[p.arxiv_id] = p
+            by_id[p.paper_id] = p
+
+    for p in acl_sdp or []:
+        if p.paper_id not in by_id:
+            by_id[p.paper_id] = p
 
     return list(by_id.values())
 
@@ -487,16 +640,25 @@ def _is_low_value_paper(paper: PaperCandidate) -> bool:
 
 
 def _parse_ranked_ids(raw: str) -> list[str]:
-    """Parse LLM ranking output into a list of arXiv IDs. Handles markdown fences."""
+    """Parse LLM ranking output into a list of paper IDs. Handles markdown fences."""
     text = raw.strip()
     if text.startswith("```"):
         lines = text.split("\n")
         text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
     try:
         items = json.loads(text)
-        return [item["arxiv_id"] for item in items if "arxiv_id" in item]
+        return [item["paper_id"] for item in items if "paper_id" in item]
     except (json.JSONDecodeError, KeyError, TypeError):
         return []
+
+
+def _source_tag(p: PaperCandidate) -> str:
+    tags = []
+    if p.source == "acl-sdp":
+        tags.append("ACL-SDP")
+    if p.hf_trending:
+        tags.append("HF-TRENDING")
+    return f" | {' | '.join(tags)}" if tags else ""
 
 
 def rank_papers(candidates: list[PaperCandidate], top_n: int = 5) -> list[PaperCandidate]:
@@ -505,8 +667,7 @@ def rank_papers(candidates: list[PaperCandidate], top_n: int = 5) -> list[PaperC
         return []
 
     paper_list = "\n\n".join(
-        f"[{i + 1}] ID: {p.arxiv_id} | Title: {p.title}"
-        f"{' | HF-TRENDING' if p.hf_trending else ''}"
+        f"[{i + 1}] ID: {p.paper_id} | Source: {p.source}{_source_tag(p)} | Title: {p.title}"
         f"\nAbstract: {p.abstract[:500]}"
         for i, p in enumerate(candidates)
     )
@@ -532,6 +693,17 @@ SELECTION CRITERIA (ranked):
 4. HF-TRENDING — community-validated papers marked HF-TRENDING get a small boost, but
    only after the above criteria are met.
 
+ACL-SDP RESERVED SLOTS (MANDATORY):
+Some papers are tagged ACL-SDP — these come from the ACL Scientific Document
+Processing workshop. You MUST include exactly 2 ACL-SDP papers in your final
+{top_n} selections. Pick the 2 best ACL-SDP papers by the same quality criteria
+above (novel method, implementable, stack-applicable). The remaining {top_n - 2}
+slots go to the best non-ACL-SDP papers.
+
+EXCEPTION: if there are fewer than 2 ACL-SDP papers in the candidate list, or if
+ALL ACL-SDP papers are pure surveys/benchmarks that would normally be hard-rejected,
+fill the remaining slot(s) from the main pool instead.
+
 HARD REJECTS — do not select these even if interesting:
 - Benchmark introductions ("we introduce a benchmark / dataset / evaluation suite")
 - Survey, review, or position papers
@@ -543,7 +715,7 @@ HARD REJECTS — do not select these even if interesting:
 Prefer papers that would make the engineer think "I can build this on Monday."
 
 Return ONLY a JSON array (no markdown, no explanation):
-[{{"arxiv_id": "...", "reason": "one-line justification naming the technical contribution"}}, ...]
+[{{"paper_id": "...", "reason": "one-line justification naming the technical contribution"}}, ...]
 
 PAPERS:
 {paper_list}"""
@@ -557,18 +729,28 @@ PAPERS:
         )
         return candidates[:top_n]
 
-    by_id = {p.arxiv_id: p for p in candidates}
+    by_id = {p.paper_id: p for p in candidates}
     selected = [by_id[aid] for aid in ranked_ids if aid in by_id]
 
     if not selected:
         log.warning("LLM ranked IDs not found in candidates — falling back to first %d", top_n)
         return candidates[:top_n]
 
+    by_source = {s: sum(1 for p in selected if p.source == s) for s in ("arxiv", "hf", "acl-sdp")}
+    log.info("Ranker picked %s", by_source)
+
     return selected
 
 
 def summarize_paper(paper: PaperCandidate) -> str:
     """LLM Pass 2: generate a structured, technical HTML summary for a single paper."""
+    if paper.source == "acl-sdp":
+        paper_url = f"https://aclanthology.org/{paper.paper_id}/"
+        source_name = "ACL Anthology"
+    else:
+        paper_url = f"https://arxiv.org/abs/{paper.paper_id}"
+        source_name = "arXiv"
+
     prompt = f"""You are writing a TECHNICAL research paper briefing for an AI/ML engineer
 who builds production systems with LLMs, agents, RAG, and fine-tuning in Python.
 
@@ -615,7 +797,7 @@ e.g. A["Label here"]. Use only plain text in labels -- no HTML entities, no spec
 characters like &, <, >, #, or parentheses. Keep labels short (3-5 words max).
 Place the diagram after the Technical Approach section.
 
-<p><a href="https://arxiv.org/abs/{paper.arxiv_id}">arXiv</a> &middot;
+<p><a href="{paper_url}">{source_name}</a> &middot;
 <a href="{paper.pdf_url}">PDF</a></p>
 
 BOLDING RULE: Use <strong> ONLY for the leading label at the start of each <li> bullet
@@ -633,7 +815,9 @@ def _papers_fetched_today() -> bool:
     today = datetime.now().strftime("%Y-%m-%d")
     with sqlite3.connect(DB_PATH) as conn:
         row = conn.execute(
-            "SELECT COUNT(*) FROM knowledge WHERE date = ? AND source LIKE 'arxiv:%'",
+            """SELECT COUNT(*) FROM knowledge
+               WHERE date = ?
+                 AND (source LIKE 'arxiv:%' OR source LIKE 'hf:%' OR source LIKE 'acl-sdp:%')""",
             (today,),
         ).fetchone()
     return row[0] > 0
@@ -650,12 +834,13 @@ def fetch_and_process_papers() -> None:
     log.info("Fetching AI research papers...")
     arxiv = fetch_arxiv_papers(days=3)
     hf = fetch_hf_daily_papers()
+    acl_sdp = fetch_acl_sdp_papers(days=365)
 
-    if not arxiv and not hf:
+    if not arxiv and not hf and not acl_sdp:
         log.warning("No papers fetched from any source — skipping.")
         return
 
-    candidates = deduplicate_papers(arxiv, hf)
+    candidates = deduplicate_papers(arxiv, hf, acl_sdp)
     log.info("Deduplicated to %d unique candidates", len(candidates))
 
     before_filter = len(candidates)
@@ -667,6 +852,8 @@ def fetch_and_process_papers() -> None:
         before_filter - len(candidates),
     )
 
+    candidates = filter_already_shown(candidates)
+
     if not candidates:
         log.warning("All candidates filtered out — skipping paper processing.")
         return
@@ -674,12 +861,14 @@ def fetch_and_process_papers() -> None:
     ranked = rank_papers(candidates, top_n=5)
     log.info("LLM selected %d papers", len(ranked))
 
+    record_shown_papers(ranked)
+
     for paper in tqdm(ranked, desc="Summarizing papers"):
         summary = summarize_paper(paper)
         store(
             KnowledgeEntry(
                 timestamp=datetime.now().isoformat(),
-                source=f"arxiv:{paper.arxiv_id}",
+                source=f"{paper.source}:{paper.paper_id}",
                 summary=summary,
             )
         )
@@ -1025,9 +1214,13 @@ emerges from combining today's items, not a generic suggestion."""
 
 
 def nice_source_label(url: str) -> str:
-    """Turn a GitHub API URL into a readable label, e.g. 'anthropics/claude-code · releases'."""
+    """Turn a source URL or prefixed ID into a readable label."""
     if url.startswith("arxiv:"):
         return url.replace("arxiv:", "arXiv · ")
+    if url.startswith("hf:"):
+        return url.replace("hf:", "HF · ")
+    if url.startswith("acl-sdp:"):
+        return url.replace("acl-sdp:", "ACL SDP · ")
     path = urlparse(url).path.strip("/")
     parts = path.split("/")
     if len(parts) >= 4 and parts[0] == "repos":
@@ -1040,7 +1233,7 @@ def nice_source_label(url: str) -> str:
 
 def _source_category(url: str) -> str:
     """Classify a source URL into a category for visual grouping."""
-    if url.startswith("arxiv:"):
+    if url.startswith("arxiv:") or url.startswith("hf:") or url.startswith("acl-sdp:"):
         return "paper"
     if "/search/repositories" in url:
         if "topic:machine-learning" in url:
@@ -1134,12 +1327,14 @@ def generate_html_report() -> None:
         conn.row_factory = sqlite3.Row
         paper_rows = conn.execute(
             "SELECT timestamp, source, summary FROM knowledge "
-            "WHERE source LIKE 'arxiv:%' AND date = ? ORDER BY timestamp DESC",
+            "WHERE (source LIKE 'arxiv:%' OR source LIKE 'hf:%' OR source LIKE 'acl-sdp:%')"
+            " AND date = ? ORDER BY timestamp DESC",
             (today,),
         ).fetchall()
         github_rows = conn.execute(
             "SELECT timestamp, source, summary FROM knowledge "
-            "WHERE source NOT LIKE 'arxiv:%' AND source NOT LIKE 'meta:%'"
+            "WHERE NOT (source LIKE 'arxiv:%' OR source LIKE 'hf:%' OR source LIKE 'acl-sdp:%')"
+            " AND source NOT LIKE 'meta:%'"
             " AND date = ? ORDER BY timestamp DESC",
             (today,),
         ).fetchall()

@@ -255,8 +255,8 @@ from dtech import _init_db
 @pytest.fixture
 def tmp_db(tmp_path, monkeypatch):
     """Redirect DB_PATH to a temp location and initialize schema."""
-    from dtech import BASE_DIR  # noqa: F401 to ensure module loaded
     import dtech
+
     db = tmp_path / "test_knowledge.db"
     monkeypatch.setattr(dtech, "DB_PATH", db)
     _init_db()
@@ -1333,7 +1333,88 @@ Key changes:
 - Pass three lists to `deduplicate_papers`.
 - Call `filter_already_shown` after the low-value filter.
 - Call `record_shown_papers(ranked)` once ranking completes and before summarization (so that even if one summarization fails, we don't re-show papers).
-- Source prefix in `store()` now uses `paper.source` and `paper.paper_id` (this line was updated in Task 1 Step 10; verify it's still correct).
+- Source prefix in `store()` uses `f"{paper.source}:{paper.paper_id}"`. Task 1 reverted this to the literal `f"arxiv:{paper.paper_id}"` to keep Task 1 purely behavior-preserving; it is restored here as part of the full prefix migration (see Steps 5a–5c below).
+
+- [ ] **Step 5a: Add failing test for `_papers_fetched_today` detecting all paper prefixes**
+
+Append to `tests/test_papers.py`:
+
+```python
+def test_papers_fetched_today_detects_hf_and_acl_prefixes(tmp_path, monkeypatch):
+    import dtech
+    db = tmp_path / "test.db"
+    monkeypatch.setattr(dtech, "DB_PATH", db)
+    dtech._init_db()
+    today = datetime.now().strftime("%Y-%m-%d")
+    with sqlite3.connect(db) as conn:
+        conn.execute(
+            "INSERT INTO knowledge (timestamp, source, summary, date) VALUES (?, ?, ?, ?)",
+            (datetime.now().isoformat(), "hf:2403.99999", "x", today),
+        )
+    assert dtech._papers_fetched_today() is True
+```
+
+Run: `uv run pytest tests/test_papers.py::test_papers_fetched_today_detects_hf_and_acl_prefixes -v`
+Expected: FAIL — current `_papers_fetched_today` only matches `arxiv:%`.
+
+- [ ] **Step 5b: Generalize `_papers_fetched_today`** (`dtech.py:644` approximately)
+
+Replace the `source LIKE 'arxiv:%'` predicate with a predicate that matches any of the three paper prefixes. Read the current function body first, then apply the minimal edit. The recommended form:
+
+```python
+        row = conn.execute(
+            """
+            SELECT 1 FROM knowledge
+            WHERE date = ?
+              AND (source LIKE 'arxiv:%' OR source LIKE 'hf:%' OR source LIKE 'acl-sdp:%')
+            LIMIT 1
+            """,
+            (today,),
+        ).fetchone()
+```
+
+Re-run the test from Step 5a; expected PASS.
+
+- [ ] **Step 5c: Generalize the two report-rendering SQL queries** (`dtech.py:1145` and `dtech.py:1150` approximately)
+
+Read the current queries first. The first one selects paper rows; the second selects non-paper rows via `NOT LIKE 'arxiv:%'`. Replace `source LIKE 'arxiv:%'` with `(source LIKE 'arxiv:%' OR source LIKE 'hf:%' OR source LIKE 'acl-sdp:%')` in both sites (the NOT-LIKE gets wrapped in a NOT of that OR group).
+
+Before editing, add a failing test to `tests/test_papers.py` that stores rows with each of the three prefixes and asserts the report-render functions put them in the correct bucket. Since those render functions are large, the simplest test is:
+
+```python
+def test_paper_prefix_predicate_helper(tmp_path, monkeypatch):
+    """Every paper-prefix source ends up in the 'paper' side of the split."""
+    import dtech
+    db = tmp_path / "test.db"
+    monkeypatch.setattr(dtech, "DB_PATH", db)
+    dtech._init_db()
+    today = datetime.now().strftime("%Y-%m-%d")
+    with sqlite3.connect(db) as conn:
+        for src in ("arxiv:1", "hf:2", "acl-sdp:3", "https://api.github.com/repos/a/b/releases"):
+            conn.execute(
+                "INSERT INTO knowledge (timestamp, source, summary, date) VALUES (?, ?, ?, ?)",
+                (datetime.now().isoformat(), src, "x", today),
+            )
+        paper_rows = conn.execute(
+            "SELECT source FROM knowledge WHERE "
+            "source LIKE 'arxiv:%' OR source LIKE 'hf:%' OR source LIKE 'acl-sdp:%'"
+        ).fetchall()
+    assert {r[0] for r in paper_rows} == {"arxiv:1", "hf:2", "acl-sdp:3"}
+```
+
+Run: `uv run pytest tests/test_papers.py -k paper_prefix -v` — should pass without code changes (test is on the predicate itself). It serves as a regression guard that the predicate string stays consistent with the actual queries.
+
+Then update the two queries in `dtech.py` to use the three-way OR predicate.
+
+- [ ] **Step 5d: Restore the generalized store prefix**
+
+In the pipeline code from Step 5 above, ensure the store call uses:
+
+```python
+                source=f"{paper.source}:{paper.paper_id}",
+```
+
+(not the temporary `f"arxiv:{paper.paper_id}"` from Task 1's fix commit).
 
 - [ ] **Step 6: Run the full test suite**
 
