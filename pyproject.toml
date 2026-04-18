@@ -11,6 +11,7 @@ dependencies = [
     "tqdm>=4.66",
     "python-dotenv>=1.0",
     "acl-anthology>=1.1.0",
+    "markdownify>=0.13",
 ]
 
 [tool.ruff]

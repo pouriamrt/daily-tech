@@ -5,6 +5,7 @@ __pycache__/
 .env
 .http_cache*
 daily_report.html
+daily_report.md
 knowledge.json
 knowledge.db
 .superpowers/
