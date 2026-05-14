@@ -87,6 +87,7 @@ def test_fetch_arxiv_papers_parses_xml(monkeypatch):
     class FakeResponse:
         status_code = 200
         text = SAMPLE_ARXIV_XML
+        extensions = {"from_cache": True}
 
         def raise_for_status(self):
             pass
@@ -102,6 +103,7 @@ def test_fetch_arxiv_papers_parses_xml(monkeypatch):
             pass
 
     monkeypatch.setattr("dtech._build_paper_client", lambda: FakeClient())
+    monkeypatch.setattr("dtech.time.sleep", lambda *_a, **_kw: None)
 
     papers = fetch_arxiv_papers(days=3)
     assert len(papers) == 1

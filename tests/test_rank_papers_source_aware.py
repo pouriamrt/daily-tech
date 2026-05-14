@@ -39,7 +39,7 @@ def test_rank_papers_prompt_tags_acl_sdp_papers():
 
     assert "| ACL-SDP" in captured_prompt["text"]
     assert "2024.sdp-1.3" in captured_prompt["text"]
-    assert "ACL-SDP RESERVED SLOTS" in captured_prompt["text"]
+    assert "ACL-SDP RESERVED SLOT" in captured_prompt["text"]
 
 
 def test_rank_papers_returns_acl_sdp_paper_when_chosen():

@@ -5,6 +5,7 @@ import logging
 import os
 import re
 import sqlite3
+import time
 import xml.etree.ElementTree as ET  # noqa: F401  (used by upcoming paper-fetch tasks)
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -32,9 +33,7 @@ REPORT_PATH = BASE_DIR / "daily_report.html"
 MARKDOWN_REPORT_PATH = BASE_DIR / "daily_report.md"
 
 # Obsidian vault raw/ ingest folder. Override with env var if the vault moves.
-OBSIDIAN_RAW_DIR = Path(
-    os.getenv("OBSIDIAN_RAW_DIR", r"C:/Users/pouri/Python/AI/Second Brain/raw")
-)
+OBSIDIAN_RAW_DIR = Path(os.getenv("OBSIDIAN_RAW_DIR", r"C:/Users/pouri/Python/AI/Second Brain/raw"))
 
 log = logging.getLogger(__name__)
 logging.basicConfig(
@@ -237,43 +236,53 @@ def _hint_for(url: str) -> str:
 
 ARXIV_NS = {"atom": "http://www.w3.org/2005/Atom", "arxiv": "http://arxiv.org/schemas/atom"}
 
-# Technique-focused queries: each targets a specific methodological area where
-# new algorithms, architectures, or training methods show up. The old broad
-# cs.AI/cs.LG/cs.CL query was removed because it pulled mostly benchmark/survey
-# noise. Every query below is scoped to a concrete technical topic.
+# Queries biased toward agentic AI, RAG, and real-world agent use cases.
+# The first three queries are the primary feed (agents, RAG, agent use cases);
+# the remaining four cover adjacent training/inference work but are kept small
+# so they only surface when directly applicable to agents or retrieval.
 ARXIV_QUERIES: tuple[str, ...] = (
-    # LLM agents: planning, reflection, tool-use, multi-agent coordination
+    # LLM agents: planning, reflection, tool-use, multi-agent coordination,
+    # agentic frameworks, autonomous agents
     "https://export.arxiv.org/api/query"
     "?search_query=all:agent+AND+(all:LLM+OR+all:language+model+OR+all:tool+use"
-    "+OR+all:planning+OR+all:reflection+OR+all:multi-agent)"
-    "&sortBy=submittedDate&sortOrder=descending&max_results=20",
-    # Retrieval: RAG, dense/hybrid search, re-ranking, embeddings, indexing
+    "+OR+all:tool+calling+OR+all:planning+OR+all:reflection+OR+all:multi-agent"
+    "+OR+all:autonomous+agent+OR+all:agentic+OR+all:agent+framework)"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=30",
+    # Retrieval & RAG: dense/hybrid search, re-ranking, embeddings, graph RAG,
+    # agentic RAG, multi-hop retrieval
     "https://export.arxiv.org/api/query"
     "?search_query=all:(retrieval+augmented+OR+RAG+OR+re-ranking+OR+dense+retrieval"
-    "+OR+hybrid+search+OR+embedding+model)+AND+all:language+model"
-    "&sortBy=submittedDate&sortOrder=descending&max_results=15",
+    "+OR+hybrid+search+OR+embedding+model+OR+graph+RAG+OR+knowledge+graph+RAG"
+    "+OR+agentic+RAG+OR+multi-hop)+AND+all:language+model"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=25",
+    # Agent use cases: coding agents, web agents, computer-use, browser
+    "https://export.arxiv.org/api/query"
+    "?search_query=all:(coding+agent+OR+software+engineering+agent+OR+web+agent"
+    "+OR+browser+agent+OR+computer+use+OR+GUI+agent+OR+OS+agent"
+    "+OR+scientific+agent+OR+research+agent)+AND+(all:LLM+OR+all:language+model)"
+    "&sortBy=submittedDate&sortOrder=descending&max_results=20",
     # Preference optimization & RL fine-tuning: RLHF, DPO, GRPO, PPO, reward models
     "https://export.arxiv.org/api/query"
     "?search_query=all:(RLHF+OR+DPO+OR+GRPO+OR+PPO+OR+preference+optimization"
     "+OR+reward+model+OR+alignment)+AND+all:language+model"
-    "&sortBy=submittedDate&sortOrder=descending&max_results=15",
+    "&sortBy=submittedDate&sortOrder=descending&max_results=10",
     # Parameter-efficient fine-tuning: LoRA, QLoRA, adapters, PEFT
     "https://export.arxiv.org/api/query"
     "?search_query=all:(LoRA+OR+QLoRA+OR+adapter+OR+PEFT+OR+parameter+efficient)"
     "+AND+all:fine-tuning"
-    "&sortBy=submittedDate&sortOrder=descending&max_results=10",
+    "&sortBy=submittedDate&sortOrder=descending&max_results=5",
     # Inference optimization: quantization, speculative decoding, KV-cache, attention kernels
     "https://export.arxiv.org/api/query"
     "?search_query=all:(quantization+OR+speculative+decoding+OR+KV+cache"
     "+OR+FlashAttention+OR+paged+attention+OR+inference+optimization)"
     "+AND+all:LLM"
-    "&sortBy=submittedDate&sortOrder=descending&max_results=15",
+    "&sortBy=submittedDate&sortOrder=descending&max_results=8",
     # Architecture innovations: MoE, state-space, linear attention, long-context
     "https://export.arxiv.org/api/query"
     "?search_query=all:(mixture+of+experts+OR+MoE+OR+state+space+model"
     "+OR+linear+attention+OR+long+context+OR+sparse+attention)"
     "+AND+all:language+model"
-    "&sortBy=submittedDate&sortOrder=descending&max_results=15",
+    "&sortBy=submittedDate&sortOrder=descending&max_results=8",
     # Reasoning & verification: CoT, self-correction, process supervision, tree search
     "https://export.arxiv.org/api/query"
     "?search_query=all:(chain+of+thought+OR+reasoning+OR+self-correction"
@@ -310,14 +319,20 @@ def fetch_arxiv_papers(days: int = 3) -> list[PaperCandidate]:
     papers: list[PaperCandidate] = []
     cutoff = datetime.now() - timedelta(days=days)
 
+    # arXiv API policy: minimum 3 seconds between requests. Cached responses
+    # (via hishel) skip the network, so the sleep is only paid on cache miss.
     with _build_paper_client() as client:
-        for query_url in ARXIV_QUERIES:
+        for idx, query_url in enumerate(ARXIV_QUERIES):
             try:
                 resp = client.get(query_url)
                 resp.raise_for_status()
             except httpx.HTTPError as exc:
                 log.warning("Failed to fetch arXiv query: %s", exc)
+                if idx < len(ARXIV_QUERIES) - 1:
+                    time.sleep(3)
                 continue
+            if not resp.extensions.get("from_cache") and idx < len(ARXIV_QUERIES) - 1:
+                time.sleep(3)
 
             root = ET.fromstring(resp.text)
 
@@ -537,23 +552,28 @@ def deduplicate_papers(
 
 
 INTEREST_PROFILE = (
-    "Senior AI/ML engineer who ships production LLM systems in Python and does "
-    "applied research on the side. Core stack: Google ADK (multi-agent "
-    "orchestration), LangChain (chains, retrieval, agents), FastAPI (serving), "
-    "HuggingFace Transformers (fine-tuning, inference). Actively building: LLM "
-    "agent architectures, tool-use and function calling, RAG pipelines with "
-    "hybrid search and re-ranking, fine-tuning (LoRA/QLoRA, DPO, GRPO), "
-    "multi-agent coordination, inference optimization. "
-    "WANTS papers that deliver a NEW METHOD, ALGORITHM, ARCHITECTURE, or "
-    "TRAINING TECHNIQUE — something implementable that changes how a system is "
-    "built. Specifically values: novel training objectives and optimizers, "
-    "parameter-efficient fine-tuning, attention and architectural innovations "
-    "(MoE, state-space, linear attention, long-context), inference-time "
-    "optimizations (quantization, speculative decoding, KV-cache, batching, "
-    "FlashAttention variants), agent reasoning mechanisms (planning, "
-    "reflection, self-correction, tool-use protocols), retrieval methods "
-    "(dense/hybrid, re-ranking, indexing), and anything with reproducible "
-    "results or open-source code. "
+    "Senior AI/ML engineer who specializes in agentic AI systems and "
+    "retrieval-augmented generation, shipping production LLM applications in "
+    "Python. Core stack: Google ADK (multi-agent orchestration), LangChain / "
+    "LangGraph (agents, chains, retrieval), FastAPI (serving), HuggingFace "
+    "Transformers (fine-tuning, inference). Actively building: multi-agent "
+    "orchestration, agent reasoning and planning, tool-use and function "
+    "calling, agentic RAG pipelines, hybrid retrieval with re-ranking, agent "
+    "evaluation frameworks, and real-world agent applications (coding, web, "
+    "computer-use, scientific workflows). "
+    "WANTS papers that advance AGENTIC AI or RAG — new agent architectures, "
+    "agent protocols, tool-use mechanisms, multi-agent coordination patterns, "
+    "retrieval methods, RAG advancements, or concrete agent use cases with "
+    "implementable techniques. Strongly values: agent reasoning mechanisms "
+    "(planning, reflection, self-correction, tool-use), multi-agent "
+    "coordination, agentic workflows and frameworks, retrieval methods "
+    "(dense/hybrid, re-ranking, graph RAG, multi-hop), real-world agent "
+    "applications (coding agents, web/browser/GUI agents, computer-use, "
+    "scientific agents), and agent evaluation. Also values, but secondarily: "
+    "novel training methods (RLHF, DPO, GRPO), parameter-efficient "
+    "fine-tuning, attention/architectural innovations (MoE, state-space, "
+    "long-context), and inference-time optimizations — preferably when "
+    "applied to agents or retrieval. "
     "DOES NOT WANT: benchmark-introduction papers, leaderboard chasing, "
     "survey/review papers, dataset papers, position/opinion pieces, pure "
     "theoretical proofs, or papers about domains unrelated to language models "
@@ -679,37 +699,47 @@ def rank_papers(candidates: list[PaperCandidate], top_n: int = 5) -> list[PaperC
         for i, p in enumerate(candidates)
     )
 
-    prompt = f"""You are selecting research papers for a senior AI engineer who needs
-NEW TECHNICAL METHODS, not benchmarks or surveys.
+    prompt = f"""You are selecting research papers for a senior AI engineer focused on
+AGENTIC AI and RAG — not benchmarks, not surveys.
 
 DEVELOPER PROFILE: {INTEREST_PROFILE}
 
-Below are {len(candidates)} recent papers. Select the top {top_n} that deliver the most
-substantive METHODOLOGICAL contribution this developer can use at work or in research.
+Below are {len(candidates)} recent papers. Select the top {top_n} that best advance
+agentic AI, RAG, or agent use cases — and deliver an implementable contribution.
 
 SELECTION CRITERIA (ranked):
 
-1. NOVEL TECHNICAL CONTRIBUTION — paper proposes a new algorithm, architecture, loss
-   function, optimizer, training scheme, decoding strategy, attention mechanism, or
-   inference technique. This is the PRIMARY criterion. If a paper does not clearly
-   introduce a new method, reject it.
-2. IMPLEMENTABILITY — the method is described precisely enough to implement, ideally
-   with released code, pseudocode, or concrete architectural details.
-3. STACK APPLICABILITY — the technique applies to LLM agents, RAG, fine-tuning, or
-   inference systems (their working stack).
-4. HF-TRENDING — community-validated papers marked HF-TRENDING get a small boost, but
-   only after the above criteria are met.
+1. AGENTIC AI OR RAG RELEVANCE — paper advances LLM agents, multi-agent systems,
+   agent reasoning/planning/tool-use, agent protocols and frameworks, RAG pipelines,
+   retrieval methods (dense/hybrid/graph/multi-hop), re-ranking, or concrete agent
+   use cases (coding, web, browser/GUI, computer-use, scientific workflows). This
+   is the PRIMARY criterion.
+2. NOVEL TECHNICAL CONTRIBUTION — paper proposes a new algorithm, architecture,
+   protocol, training scheme, decoding/reasoning strategy, retrieval method, or
+   inference technique. Required: if the paper does not introduce a new method,
+   reject it.
+3. IMPLEMENTABILITY — the method is described precisely enough to implement,
+   ideally with released code, pseudocode, or concrete architectural details.
+4. STACK APPLICABILITY — applies to LLM agents, RAG, fine-tuning, or inference
+   systems (their working stack).
+5. HF-TRENDING — community-validated papers marked HF-TRENDING get a small boost,
+   but only after the above criteria are met.
 
-ACL-SDP RESERVED SLOTS (MANDATORY):
+STRONG PREFERENCE: papers about LLM agents, multi-agent systems, agent tool-use,
+RAG pipelines, retrieval methods, and agent applications (coding/web/computer-use)
+outrank papers about training internals (PEFT, RLHF, MoE, quantization) unless
+the training/inference method is directly applied to agents or retrieval.
+
+ACL-SDP RESERVED SLOT (MANDATORY):
 Some papers are tagged ACL-SDP — these come from the ACL Scientific Document
-Processing workshop. You MUST include exactly 2 ACL-SDP papers in your final
-{top_n} selections. Pick the 2 best ACL-SDP papers by the same quality criteria
-above (novel method, implementable, stack-applicable). The remaining {top_n - 2}
-slots go to the best non-ACL-SDP papers.
+Processing workshop. You MUST include exactly 1 ACL-SDP paper in your final
+{top_n} selections. Pick the best ACL-SDP paper by the same quality criteria
+above (agentic/RAG relevance, novel method, implementable). The remaining
+{top_n - 1} slots go to the best non-ACL-SDP papers.
 
-EXCEPTION: if there are fewer than 2 ACL-SDP papers in the candidate list, or if
-ALL ACL-SDP papers are pure surveys/benchmarks that would normally be hard-rejected,
-fill the remaining slot(s) from the main pool instead.
+EXCEPTION: if there are no ACL-SDP papers in the candidate list, or if ALL
+ACL-SDP papers are pure surveys/benchmarks that would normally be hard-rejected,
+fill the remaining slot from the main pool instead.
 
 HARD REJECTS — do not select these even if interesting:
 - Benchmark introductions ("we introduce a benchmark / dataset / evaluation suite")
@@ -2721,13 +2751,11 @@ def generate_markdown_report() -> Path:
             (today_iso,),
         ).fetchall()
         relationship_row = conn.execute(
-            "SELECT summary FROM knowledge "
-            "WHERE source = 'meta:relationship-map' AND date = ?",
+            "SELECT summary FROM knowledge WHERE source = 'meta:relationship-map' AND date = ?",
             (today_iso,),
         ).fetchone()
         novel_idea_row = conn.execute(
-            "SELECT summary FROM knowledge "
-            "WHERE source = 'meta:novel-idea' AND date = ?",
+            "SELECT summary FROM knowledge WHERE source = 'meta:novel-idea' AND date = ?",
             (today_iso,),
         ).fetchone()
 
